@@ -13,7 +13,7 @@ Windows 桌面工具，通过 Vultr API 独立创建、查询和销毁东京、�
    cd vultr-node-manager
    ```
 
-2. 从已经能用的主机上，通过你信任的方式复制 **`nodes.json` 和 `vultr-api.key`**，例如放到新主机的 `D:\vultr-private-settings`。当前主机原始配置在 `E:\Vultr节点管理`，这两个文件也可从配置完成的仓库目录取得。
+2. 从已经能用的主机的仓库目录（`setup.ps1` 同级），通过你信任的方式复制 **`nodes.json` 和 `vultr-api.key`**，例如放到新主机的 `D:\vultr-private-settings`。
 
 3. 在仓库目录执行：
 
