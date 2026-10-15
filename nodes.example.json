@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "nodes": [
+    {
+      "id": "tokyo",
+      "name": "东京",
+      "linkName": "Tokyo-REALITY",
+      "region": "nrt",
+      "label": "tokyo-reality",
+      "domain": "YOUR_TOKYO_SUBDOMAIN.duckdns.org",
+      "startupScriptId": "YOUR_VULTR_STARTUP_SCRIPT_ID",
+      "plan": "vc2-1c-1gb",
+      "osId": 2284,
+      "uuid": "YOUR_VLESS_UUID",
+      "publicKey": "YOUR_REALITY_PUBLIC_KEY",
+      "shortId": "YOUR_REALITY_SHORT_ID",
+      "sni": "www.microsoft.com"
+    },
+    {
+      "id": "los-angeles",
+      "name": "洛杉矶（北美）",
+      "linkName": "LosAngeles-REALITY",
+      "region": "lax",
+      "label": "lax-reality",
+      "domain": "YOUR_LAX_SUBDOMAIN.duckdns.org",
+      "startupScriptId": "YOUR_VULTR_STARTUP_SCRIPT_ID",
+      "plan": "vc2-1c-1gb",
+      "osId": 2284,
+      "uuid": "YOUR_VLESS_UUID",
+      "publicKey": "YOUR_REALITY_PUBLIC_KEY",
+      "shortId": "YOUR_REALITY_SHORT_ID",
+      "sni": "www.microsoft.com"
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+name: Windows checks
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  powershell:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: PowerShell 5.1 syntax
+        shell: powershell
+        run: .\tests\check-syntax.ps1
+      - name: Node lifecycle regression (mock API only)
+        shell: powershell
+        run: .\tests\node-regression.ps1
+      - name: First-run and migration setup (local fixtures only)
+        shell: powershell
+        run: .\tests\portable-setup.ps1

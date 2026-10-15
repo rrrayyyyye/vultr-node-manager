@@ -1,0 +1,34 @@
+# Local account credentials and node connection details
+/nodes.json
+/vultr-api.key
+/startup-script.id
+*.key
+*.pem
+.env
+.env.*
+!.env.example
+
+# Generated client configs, deployment copies, diagnostics and backups
+/客户端配置/
+/备份*/
+/backups/
+/lax-bootstrap.sh
+/*.preview.ps1
+*.log
+*.out
+*.err
+*.zip
+/tests/tools/
+/tests/lib/
+/tests/live-*.json
+/tests/*preview.png
+/tests/部署验证记录.md
+/private-settings/
+*.local.json
+
+# Editor / OS files
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+__pycache__/

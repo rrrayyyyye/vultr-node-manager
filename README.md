@@ -1,0 +1,73 @@
+# Vultr 多地区节点管理
+
+Windows 桌面工具，通过 Vultr API 独立创建、查询和销毁东京、洛杉矶等地区的 sing-box 节点。固定 DuckDNS 域名跟随服务器 IP，客户端无需每次重建都修改地址。
+
+## 在另一台 Windows 主机上使用
+
+仓库保存程序和配置模板。实际账号配置留在本机；首次换机需要额外传递两个文件。
+
+1. 在新主机安装 Git，登录有权访问此私有仓库的 GitHub 账号，然后克隆：
+
+   ```powershell
+   git clone https://github.com/rrrayyyyye/vultr-node-manager.git
+   cd vultr-node-manager
+   ```
+
+2. 从已经能用的主机上，通过你信任的方式复制 **`nodes.json` 和 `vultr-api.key`**，例如放到新主机的 `D:\vultr-private-settings`。当前主机原始配置在 `E:\Vultr节点管理`，这两个文件也可从配置完成的仓库目录取得。
+
+3. 在仓库目录执行：
+
+   ```powershell
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\setup.ps1 -SettingsSource "D:\vultr-private-settings"
+   ```
+
+4. 双击新生成的桌面「Vultr节点管理」，选择地区并刷新状态。第一次先查询，不必点击「开节点」。同一 Vultr 账号下，两台电脑管理的是同一组服务器；一台电脑销毁节点会影响所有正在使用该节点的设备。
+
+5. 后续在仓库目录执行 `git pull --ff-only` 更新程序。被 Git 忽略的个人配置会保留。若你改过程序，先保存修改再更新。
+
+要求：Windows PowerShell 5.1（系统自带）或可运行 Windows Forms 的 Windows 环境；可访问 Vultr API 和 AliDNS DoH。Vultr API 如设置了来源 IP 限制，需允许新主机的实际出口 IP。
+
+## 只在另一台设备使用代理
+
+仅使用线路时无需安装管理工具，也无需复制 Vultr API 密钥。点击「导出配置」，把生成的 `客户端配置/vultr-multi-region.yaml` 导入支持 VLESS + REALITY 的客户端，再选择对应地区。该文件含连接凭据，应私下传递。
+
+## 操作
+
+| 按钮 | 行为 |
+|---|---|
+| 开节点 | 创建当前地区实例；同标签、同地区实例存在时不重复创建 |
+| 关节点 | 确认后永久销毁当前地区实例及数据 |
+| 刷新状态 | 查看实例状态、域名解析与 TCP 443 可达性 |
+| 导出配置 | 生成包含所有地区的客户端 YAML |
+
+关闭管理窗口不会销毁服务器。普通关机也不等于释放云端资源。实例初始化失败后仍可能存在并计费，应刷新状态后再决定排查或销毁。每个地区的实例分别计费，以 Vultr 实际套餐和账单为准。
+
+状态为绿色表示基础检查通过，不代表完整代理握手、网站访问或聊天长连接一定正常。管理器选择地区不会自动切换 FlClash 的出口节点。
+
+命令行用法：
+
+```powershell
+.\vultr-node.ps1 status -Node tokyo
+.\vultr-node.ps1 start -Node los-angeles
+.\vultr-node.ps1 status -Node los-angeles
+.\vultr-node.ps1 stop -Node los-angeles
+.\vultr-node.ps1 export
+```
+
+## 新账号 / 新增地区
+
+没有已有配置时，先执行 `setup.ps1 -InitializeOnly` 生成本地模板，再填写 `nodes.json` 与 `vultr-api.key`。模板中的 `YOUR_*` 值必须全部替换。`setup.ps1` 会检查本地配置，不创建云服务器。
+
+每个地区使用独立的实例标签、域名和云端开机脚本 ID。`server/bootstrap.example.sh` 是去除凭据的服务端模板；替换域名、DuckDNS Token、VLESS UUID、REALITY 私钥和 short ID 后，再通过 Vultr 控制台保存为开机脚本。客户端公钥、UUID、short ID 必须与服务端匹配。已有账号换机时无需重新上传开机脚本。
+
+不要把实际初始化脚本、密钥、连接配置、日志或备份加入提交，即使这是私有仓库。仓库的 `.gitignore` 已排除这些文件。两台主机同时对同一地区进行开关操作仍可能产生竞态，操作前互相确认；本机互斥锁只约束本机。
+
+## 开发与验证
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\check-syntax.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\node-regression.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\portable-setup.ps1
+```
+
+测试使用模板、模拟 API 与临时目录，不需要真实凭据，不创建或删除真实实例。GitHub Actions 在提交与 PR 时运行这些检查；这属于自动测试，Codex 自动 PR 审查可日后单独启用。
