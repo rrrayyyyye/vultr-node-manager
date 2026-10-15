@@ -313,7 +313,7 @@ function Update-Card([string]$t) {
   $markers = [regex]::Matches($t, '(?m)^@@NODE_STATUS@@([^\r\n]+)')
   $lblId.Text='—'; $lblIp.Text='—'; $lblDns.Text='—'; $lblPort.Text='—'
   if ($markers.Count -eq 0) {
-    $banner.Text = "$($script:selectedNode.name) · 查询失败，请查看日志"
+    $banner.Text = "$($script:selectedNode.name) · 查询失败，未确认云端状态"
     $banner.BackColor = $colWarn; return
   }
   try { $data = $markers[$markers.Count-1].Groups[1].Value | ConvertFrom-Json }

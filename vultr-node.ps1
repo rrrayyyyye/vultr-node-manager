@@ -13,17 +13,46 @@ $Selected = @($Config.nodes | Where-Object { $_.id -eq $Node })
 if ($Selected.Count -ne 1) { throw "节点配置不存在或重复：$Node" }
 $Current = $Selected[0]
 
+function Invoke-ManagementRequest {
+  param([hashtable]$Request)
+  # Windows PowerShell 5.1 inherits the user's HTTP proxy. Management must
+  # remain reachable after that proxy's selected node has been destroyed.
+  # Scope these .NET settings to this synchronous request, never the OS.
+  $previousProxy = [Net.WebRequest]::DefaultWebProxy
+  $previousTls = [Net.ServicePointManager]::SecurityProtocol
+  try {
+    [Net.WebRequest]::DefaultWebProxy = [Net.WebProxy]::new()
+    # Keep OS defaults on modern .NET; replace explicit legacy TLS settings.
+    if ($previousTls -ne 0) {
+      # TLS 1.2 / 1.3 mask; numeric TLS 1.3 supports older .NET enum definitions.
+      $modernTls = [int]$previousTls -band (3072 -bor 12288)
+      [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]($modernTls -bor 3072)
+    }
+    Invoke-RestMethod @Request -ErrorAction Stop
+  } finally {
+    [Net.WebRequest]::DefaultWebProxy = $previousProxy
+    [Net.ServicePointManager]::SecurityProtocol = $previousTls
+  }
+}
+
 function Invoke-Api {
   param([string]$Path, [string]$Method = 'Get', $Body = $null)
   $apiArgs = @{ Uri = "$Base$Path"; Method = $Method; Headers = $Headers; TimeoutSec = 60 }
   if ($null -ne $Body) { $apiArgs.ContentType = 'application/json'; $apiArgs.Body = ($Body | ConvertTo-Json -Depth 8) }
-  Invoke-RestMethod @apiArgs
+  try { Invoke-ManagementRequest $apiArgs }
+  catch { throw "Vultr API 直连请求失败：$($_.Exception.Message) 请检查本机直连网络、TLS 和 API 来源 IP 限制；未确认云端操作结果。" }
 }
 
 function Get-AllInstances {
   $path = '/instances?per_page=100'; $seen = @{}
   do {
     $page = Invoke-Api $path
+    $links = $page.meta.links
+    $hasNext = if ($links -is [Collections.IDictionary]) { $links.Contains('next') }
+               else { $null -ne $links -and $links.PSObject.Properties.Name -contains 'next' }
+    if ($null -eq $page -or $page.instances -isnot [array] -or -not $hasNext) {
+      throw 'Vultr 实例列表响应不完整，无法确认节点是否存在。'
+    }
     @($page.instances) | Where-Object { $null -ne $_ }
     $next = $page.meta.links.next
     if ($next) {
@@ -87,7 +116,7 @@ function Test-Port443([string]$Ip) {
 function Get-DnsIp {
   try {
     $name = [uri]::EscapeDataString($Current.domain)
-    $dns = Invoke-RestMethod -Uri "https://223.5.5.5/resolve?name=$name&type=A" -Headers @{Accept='application/dns-json'} -TimeoutSec 10
+    $dns = Invoke-ManagementRequest @{ Uri="https://223.5.5.5/resolve?name=$name&type=A"; Headers=@{Accept='application/dns-json'}; TimeoutSec=10 }
     $answers = @($dns.Answer | Where-Object { $_.type -eq 1 })
     if ($answers.Count -gt 0) { return [string]$answers[0].data }
   } catch { }

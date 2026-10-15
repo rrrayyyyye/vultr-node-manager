@@ -25,7 +25,7 @@ Windows 桌面工具，通过 Vultr API 独立创建、查询和销毁东京、�
 
 5. 后续在仓库目录执行 `git pull --ff-only` 更新程序。被 Git 忽略的个人配置会保留。若你改过程序，先保存修改再更新。
 
-要求：Windows PowerShell 5.1（系统自带）或可运行 Windows Forms 的 Windows 环境；可访问 Vultr API 和 AliDNS DoH。Vultr API 如设置了来源 IP 限制，需允许新主机的实际出口 IP。
+要求：Windows PowerShell 5.1（系统自带）或可运行 Windows Forms 的 Windows 环境；可直连 Vultr API 和 AliDNS DoH。Vultr API 如设置了来源 IP 限制，需允许每台管理主机直连时的实际出口 IP。
 
 如果浏览器能访问 GitHub，但 `git clone` 提示连接重置，Git 可能没有使用系统代理。例如新主机的 FlClash 确实监听 `127.0.0.1:7890` 时，可用以下命令克隆；端口不同请改为该主机实际端口：
 
@@ -52,6 +52,10 @@ git config --local http.https://github.com/.proxy http://127.0.0.1:7890
 
 关闭管理窗口不会销毁服务器。普通关机也不等于释放云端资源。实例初始化失败后仍可能存在并计费，应刷新状态后再决定排查或销毁。每个地区的实例分别计费，以 Vultr 实际套餐和账单为准。
 
+管理请求（Vultr API 和域名 DoH 查询）绕过 Windows 系统 HTTP 代理，避免所选代理节点销毁后连带失去查询、创建能力。仅在当前请求内调整 .NET 代理及 TLS 设置，不修改系统代理或 FlClash 配置；兼容旧版 PowerShell 的 TLS 设置，同时保留现代系统的 TLS 默认协商。此设置不绕过 VPN/TUN 等系统层路由，使用 TUN 时仍需保证管理域名能走可用线路。
+
+刷新会重新分页查询云端实例，不依赖本机的开关记录。因此另一台电脑销毁后，本机刷新应显示「未创建 / 已销毁」。只有成功取得完整实例列表后才能确认这一状态；API 断网、鉴权失败或响应不完整会显示「查询失败，未确认云端状态」，不能据此判断已停止。若更新后仍有直连错误，请检查实际网络、系统 TLS 支持和 Vultr API 来源 IP 白名单。
+
 状态为绿色表示基础检查通过，不代表完整代理握手、网站访问或聊天长连接一定正常。管理器选择地区不会自动切换 FlClash 的出口节点。
 
 命令行用法：
@@ -77,6 +81,7 @@ git config --local http.https://github.com/.proxy http://127.0.0.1:7890
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\check-syntax.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\node-regression.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\status-network.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\portable-setup.ps1
 ```
 

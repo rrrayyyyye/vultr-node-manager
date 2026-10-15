@@ -15,6 +15,9 @@ jobs:
       - name: Node lifecycle regression (mock API only)
         shell: powershell
         run: .\tests\node-regression.ps1
+      - name: Management transport and remote deletion status (mock API only)
+        shell: powershell
+        run: .\tests\status-network.ps1
       - name: First-run and migration setup (local fixtures only)
         shell: powershell
         run: .\tests\portable-setup.ps1

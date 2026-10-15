@@ -4,7 +4,7 @@ This is a Windows PowerShell 5.1 and Windows Forms project. Keep runtime code co
 
 Private runtime settings are `nodes.json` and `vultr-api.key`. Never commit them, generated client configs, real bootstrap scripts, logs, deployment records or backups. Use `nodes.example.json` and mocked fixtures in tests.
 
-Run the three test scripts documented in README before committing changes. Tests must not need real credentials or call live cloud APIs. Live status checks are read-only; never create or destroy real cloud resources as an automated test.
+Run all test scripts documented in README before committing changes. Tests must not need real credentials or call live cloud APIs. Live status checks are read-only; never create or destroy real cloud resources as an automated test.
 
 ## Code Review Rules
 
