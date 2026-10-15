@@ -27,6 +27,16 @@ Windows 桌面工具，通过 Vultr API 独立创建、查询和销毁东京、�
 
 要求：Windows PowerShell 5.1（系统自带）或可运行 Windows Forms 的 Windows 环境；可访问 Vultr API 和 AliDNS DoH。Vultr API 如设置了来源 IP 限制，需允许新主机的实际出口 IP。
 
+如果浏览器能访问 GitHub，但 `git clone` 提示连接重置，Git 可能没有使用系统代理。例如新主机的 FlClash 确实监听 `127.0.0.1:7890` 时，可用以下命令克隆；端口不同请改为该主机实际端口：
+
+```powershell
+git -c http.proxy=http://127.0.0.1:7890 clone https://github.com/rrrayyyyye/vultr-node-manager.git
+cd vultr-node-manager
+git config --local http.https://github.com/.proxy http://127.0.0.1:7890
+```
+
+这是该主机的本地 Git 配置，不会随仓库同步到其他主机。
+
 ## 只在另一台设备使用代理
 
 仅使用线路时无需安装管理工具，也无需复制 Vultr API 密钥。点击「导出配置」，把生成的 `客户端配置/vultr-multi-region.yaml` 导入支持 VLESS + REALITY 的客户端，再选择对应地区。该文件含连接凭据，应私下传递。
