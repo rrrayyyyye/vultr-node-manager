@@ -7,6 +7,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $Dir = Split-Path -Parent $MyInvocation.MyCommand.Path
+. (Join-Path $Dir 'node-time.ps1')
 $Base = 'https://api.vultr.com/v2'
 $Config = Get-Content -LiteralPath (Join-Path $Dir 'nodes.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 $Selected = @($Config.nodes | Where-Object { $_.id -eq $Node })
@@ -126,7 +127,8 @@ function Get-DnsIp {
 function Write-Status {
   $instances = @(Get-Node)
   $result = [ordered]@{ node=$Current.id; name=$Current.name; region=$Current.region; domain=$Current.domain;
-    exists=$false; id=$null; ip=$null; status='absent'; powerStatus=$null; port443=$false; dnsIp=$null; dnsMatches=$false }
+    exists=$false; id=$null; ip=$null; status='absent'; powerStatus=$null; port443=$false; dnsIp=$null; dnsMatches=$false;
+    createdAtUtc=$null; ageSeconds=$null }
   if ($instances.Count -eq 0) {
     Write-Host "$($Current.name)：当前没有此节点实例。" -ForegroundColor Yellow
   } else {
@@ -136,8 +138,14 @@ function Write-Status {
     $result.port443 = Test-Port443 $instance.main_ip
     $result.dnsIp = Get-DnsIp
     $result.dnsMatches = [bool]($result.dnsIp -and $result.dnsIp -eq $instance.main_ip)
+    $timing = Get-InstanceTiming ([string]$instance.date_created)
+    $result.createdAtUtc = $timing.createdAtUtc; $result.ageSeconds = $timing.ageSeconds
     Write-Host "$($Current.name)：找到节点实例。" -ForegroundColor Cyan
     $instance | Select-Object id, label, region, plan, status, power_status, main_ip, date_created | Format-List | Out-Host
+    if ($null -ne $result.ageSeconds) {
+      Write-Host ('创建时间（本地）: ' + ([DateTimeOffset]::Parse($result.createdAtUtc)).ToLocalTime().ToString('yyyy-MM-dd HH:mm:ss zzz'))
+      Write-Host ('已开时长（自创建起）: ' + (Format-NodeAge $result.ageSeconds))
+    } else { Write-Host '创建时间 / 已开时长: 无有效创建时间' }
     Write-Host "443 端口可达: $($result.port443)"
     Write-Host "域名 $($Current.domain) -> $($result.dnsIp)；与实例一致: $($result.dnsMatches)"
     Write-Host '以上是基础连通检查，不代表完整代理链路已经验证。'

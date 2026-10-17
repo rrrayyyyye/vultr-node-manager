@@ -1,5 +1,6 @@
 ﻿$ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
+. (Join-Path $root 'node-time.ps1')
 foreach ($file in @('vultr-node.ps1', 'vultr-node-gui.ps1')) {
   $tokens=$null; $errors=$null
   $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $root $file),[ref]$tokens,[ref]$errors)
@@ -9,6 +10,18 @@ foreach ($file in @('vultr-node.ps1', 'vultr-node-gui.ps1')) {
   }
 }
 function Assert-Task([bool]$Ok, [string]$Message) { if (-not $Ok) { throw $Message } }
+$fixedNow=[DateTimeOffset]::Parse('2026-10-17T01:02:03Z')
+$utcTiming=Get-InstanceTiming '2026-10-16T00:00:00Z' $fixedNow
+$offsetTiming=Get-InstanceTiming '2026-10-16T08:00:00+08:00' $fixedNow
+$implicitUtcTiming=Get-InstanceTiming '2026-10-16T00:00:00' $fixedNow
+Assert-Task ($utcTiming.ageSeconds -eq 90123 -and $offsetTiming.createdAtUtc -eq $utcTiming.createdAtUtc -and $implicitUtcTiming.ageSeconds -eq 90123) 'Creation time timezone conversion failed'
+Assert-Task ((Format-NodeAge $utcTiming.ageSeconds) -eq '1天 01小时 02分 03秒') 'Multi-day lifetime display failed'
+Assert-Task ((Format-NodeAge 0) -eq '00小时 00分 00秒') 'New instance lifetime display failed'
+foreach ($invalidDate in @('', 'invalid', '2027-01-01T00:00:00Z')) {
+  $invalidTiming=Get-InstanceTiming $invalidDate $fixedNow
+  Assert-Task ($null -eq $invalidTiming.createdAtUtc -and $null -eq $invalidTiming.ageSeconds) 'Invalid/future date produced a misleading lifetime'
+}
+Write-Host 'PASS: lifetime calculation handles UTC, timezone offsets, day boundaries and invalid timestamps'
 $Config=Get-Content -LiteralPath (Join-Path $root 'nodes.example.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 $Current=$Config.nodes[0]; $script:selectedNode=$Current
 $Base='https://api.example.invalid/v2'; $Headers=@{Authorization='Bearer fake-test-key'}
@@ -16,7 +29,7 @@ $script:requests=[Collections.Generic.List[object]]::new()
 $script:lines=[Collections.Generic.List[string]]::new()
 $script:mode='empty'; $script:apiCalls=0
 $script:expectedTls=[Net.SecurityProtocolType]::Tls12
-$fixture=[pscustomobject]@{id='tokyo-test';label=$Current.label;region='nrt';main_ip='192.0.2.1';status='active';power_status='running'}
+$fixture=[pscustomobject]@{id='tokyo-test';label=$Current.label;region='nrt';main_ip='192.0.2.1';status='active';power_status='running';date_created=([DateTimeOffset]::UtcNow.AddHours(-25)).ToString('o')}
 function Write-Host {
   param([Parameter(Position=0,ValueFromRemainingArguments=$true)]$Object, $ForegroundColor)
   $script:lines.Add(($Object -join ' '))
@@ -76,10 +89,12 @@ try {
   Write-Status *> $null
   $present=($script:lines | Where-Object { $_ -like '@@NODE_STATUS@@*' } | Select-Object -Last 1).Substring(15) | ConvertFrom-Json
   Assert-Task ($present.exists -and $present.dnsMatches -and $present.port443) 'Present node or direct DoH status lost'
+  Assert-Task ($present.createdAtUtc -and $present.ageSeconds -ge 90000 -and $present.ageSeconds -lt 90120) 'Cloud creation timestamp not included in status'
   $script:mode='empty'; $script:lines.Clear()
   Write-Status *> $null
   $absent=($script:lines | Where-Object { $_ -like '@@NODE_STATUS@@*' } | Select-Object -Last 1).Substring(15) | ConvertFrom-Json
   Assert-Task (-not $absent.exists -and $absent.status -eq 'absent') 'Remote deletion not reflected on refresh'
+  Assert-Task ($null -eq $absent.createdAtUtc -and $null -eq $absent.ageSeconds) 'Destroyed node retained lifetime metadata'
   Microsoft.PowerShell.Utility\Write-Host 'PASS: live cloud state transitions from present to absent without a local stop operation'
 
   foreach ($mode in @('error','forbidden','malformed','null-list','no-pagination','second-page-error')) {
@@ -99,12 +114,29 @@ try {
   $lblIp=[pscustomobject]@{Text='';ForeColor=''}
   $lblDns=[pscustomobject]@{Text='';ForeColor=''}
   $lblPort=[pscustomobject]@{Text='';ForeColor=''}
+  $lblCreated=[pscustomobject]@{Text='';ForeColor=''}
+  $lblAge=[pscustomobject]@{Text='';ForeColor=''}
   Update-Card ('@@NODE_STATUS@@'+($present | ConvertTo-Json -Compress))
   Assert-Task ($banner.BackColor -eq $colOk) 'Running status display regressed'
+  Assert-Task ($lblAge.Text -like '1天 01小时*' -and $lblCreated.Text -ne '—') 'Instance lifetime not displayed'
+  $expectedLocalTime=([DateTimeOffset]::Parse($present.createdAtUtc)).ToLocalTime().ToString('yyyy-MM-dd HH:mm:ss zzz')
+  Assert-Task ($lblCreated.Text -eq $expectedLocalTime) 'Creation time not displayed in the local timezone'
+  $script:createdAtUtc=([DateTimeOffset]::UtcNow.AddHours(-26)).ToString('o')
+  Update-NodeAge
+  Assert-Task ($lblAge.Text -like '1天 02小时*') 'Local clock does not recalculate lifetime'
   Update-Card ('@@NODE_STATUS@@'+($absent | ConvertTo-Json -Compress))
   Assert-Task ($banner.Text -like '*已销毁*' -and $banner.BackColor -eq $colOff) 'Confirmed absence not shown as destroyed'
+  Update-NodeAge
+  Assert-Task ($lblCreated.Text -eq '—' -and $lblAge.Text -eq '—') 'Destroyed node kept ticking'
+  $script:createdAtUtc=$present.createdAtUtc; Update-NodeAge
   Update-Card 'Simulated failed child: no status marker'
   Assert-Task ($banner.Text -like '*未确认云端状态*' -and $banner.BackColor -eq $colWarn -and $lblIp.Text -eq '—') 'Failed refresh falsely shown as stopped or retains stale IP'
+  Update-NodeAge
+  Assert-Task ($lblCreated.Text -eq '—' -and $lblAge.Text -eq '—') 'Failed query retained stale lifetime'
+  $present.createdAtUtc=$null
+  Update-Card ('@@NODE_STATUS@@'+($present | ConvertTo-Json -Compress))
+  Assert-Task ($banner.BackColor -eq $colOk -and $lblAge.Text -eq '—') 'Missing creation time broke otherwise valid node status'
+  Microsoft.PowerShell.Utility\Write-Host 'PASS: lifetime ticks locally and clears on deletion, failed refresh or missing creation timestamp'
   Microsoft.PowerShell.Utility\Write-Host 'PASS: GUI distinguishes confirmed deletion from unknown status after query failure'
 } finally {
   [Net.WebRequest]::DefaultWebProxy=$originalProxy

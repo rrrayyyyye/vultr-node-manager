@@ -9,6 +9,7 @@ param([switch]$SelfTest, [string]$Node = 'tokyo')
 $ErrorActionPreference = 'Stop'
 
 $Dir        = Split-Path -Parent $MyInvocation.MyCommand.Path
+. (Join-Path $Dir 'node-time.ps1')
 $NodeScript = Join-Path $Dir 'vultr-node.ps1'
 $NodeConfig = Get-Content -LiteralPath (Join-Path $Dir 'nodes.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 $script:selectedNode = @($NodeConfig.nodes | Where-Object { $_.id -eq $Node })[0]
@@ -134,8 +135,8 @@ $colBtnPl = [Drawing.Color]::FromArgb(232, 234, 238)
 
 $form = New-Object Windows.Forms.Form
 $form.Text = 'Vultr 多地区节点管理 · 东京 / 洛杉矶'
-$form.ClientSize = New-Object Drawing.Size(850, 650)
-$form.MinimumSize = New-Object Drawing.Size(830, 560)
+$form.ClientSize = New-Object Drawing.Size(850, 704)
+$form.MinimumSize = New-Object Drawing.Size(830, 614)
 $form.StartPosition = 'CenterScreen'
 $form.Font = New-Object Drawing.Font('Microsoft YaHei UI', 9)
 $form.BackColor = $colFace
@@ -147,7 +148,7 @@ $root.RowCount = 6
 [void]$root.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Percent, 100)))
 [void]$root.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Absolute, 74)))
 [void]$root.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Absolute, 48)))
-[void]$root.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Absolute, 104)))
+[void]$root.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Absolute, 158)))
 [void]$root.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Absolute, 58)))
 [void]$root.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Percent, 100)))
 [void]$root.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Absolute, 26)))
@@ -185,20 +186,20 @@ $planLabel.Text = "$($script:selectedNode.region) · $($script:selectedNode.plan
 $selectorBar.Controls.AddRange(@($selectorLabel, $nodeSelector, $planLabel))
 [void]$root.Controls.Add($selectorBar, 0, 1)
 
-# ---- 详情四行 ----
+# ---- 详情：含云端创建时间与实例存续时长 ----
 $details = New-Object Windows.Forms.TableLayoutPanel
 $details.Dock = 'Fill'
 $details.ColumnCount = 2
-$details.RowCount = 4
+$details.RowCount = 6
 $details.Padding = New-Object Windows.Forms.Padding(18, 6, 18, 6)
 [void]$details.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Absolute, 96)))
 [void]$details.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Percent, 100)))
-for ($i = 0; $i -lt 4; $i++) { [void]$details.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Percent, 25))) }
+for ($i = 0; $i -lt $details.RowCount; $i++) { [void]$details.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Percent, (100.0 / $details.RowCount)))) }
 [void]$root.Controls.Add($details, 0, 2)
 
-$detailNames = @('实例 ID', '公网 IP', '域名解析', '443 端口')
+$detailNames = @('实例 ID', '公网 IP', '域名解析', '443 端口', '创建时间', '已开时长')
 $detailValues = @{}
-for ($i = 0; $i -lt 4; $i++) {
+for ($i = 0; $i -lt $detailNames.Count; $i++) {
   $lk = New-Object Windows.Forms.Label
   $lk.Text = $detailNames[$i]
   $lk.Dock = 'Fill'
@@ -218,6 +219,9 @@ $lblId   = $detailValues['实例 ID']
 $lblIp   = $detailValues['公网 IP']
 $lblDns  = $detailValues['域名解析']
 $lblPort = $detailValues['443 端口']
+$lblCreated = $detailValues['创建时间']
+$lblAge = $detailValues['已开时长']
+$script:createdAtUtc = $null
 
 # ---- 按钮条 ----
 $bar = New-Object Windows.Forms.FlowLayoutPanel
@@ -309,9 +313,15 @@ function Set-Busy([bool]$b) {
   $progress.Visible   = $b
 }
 
+function Update-NodeAge {
+  $timing = Get-InstanceTiming $script:createdAtUtc
+  $lblAge.Text = if ($null -ne $timing.ageSeconds) { (Format-NodeAge $timing.ageSeconds) + '（自创建起）' } else { '—' }
+}
+
 function Update-Card([string]$t) {
   $markers = [regex]::Matches($t, '(?m)^@@NODE_STATUS@@([^\r\n]+)')
   $lblId.Text='—'; $lblIp.Text='—'; $lblDns.Text='—'; $lblPort.Text='—'
+  $lblCreated.Text='—'; $lblAge.Text='—'; $script:createdAtUtc=$null
   if ($markers.Count -eq 0) {
     $banner.Text = "$($script:selectedNode.name) · 查询失败，未确认云端状态"
     $banner.BackColor = $colWarn; return
@@ -324,6 +334,12 @@ function Update-Card([string]$t) {
     $banner.BackColor = $colOff; return
   }
   $lblId.Text = $data.id; $lblIp.Text = $data.ip
+  $timing = Get-InstanceTiming ([string]$data.createdAtUtc)
+  if ($null -ne $timing.createdAtUtc) {
+    $script:createdAtUtc = $timing.createdAtUtc
+    $lblCreated.Text = ([DateTimeOffset]::Parse($timing.createdAtUtc)).ToLocalTime().ToString('yyyy-MM-dd HH:mm:ss zzz')
+    Update-NodeAge
+  }
   $lblDns.Text = "$($data.domain) → $($data.dnsIp)"
   $lblDns.ForeColor = if ($data.dnsMatches) { $colOk } else { $colWarn }
   $lblPort.Text = if ($data.port443) { 'TCP 可达（未验证完整代理）' } else { 'TCP 不可达' }
@@ -403,6 +419,11 @@ $timer.Add_Tick({
   if ($script:job.Process.HasExited) { Complete-Action }
 })
 
+# This clock only updates the displayed lifetime; cloud status still needs refresh.
+$ageTimer = New-Object Windows.Forms.Timer
+$ageTimer.Interval = 1000
+$ageTimer.Add_Tick({ Update-NodeAge })
+
 # ==================== 事件绑定 ====================
 $btnStart.Add_Click({ Invoke-Action 'start' })
 $btnRefresh.Add_Click({ Invoke-Action 'status' })
@@ -412,6 +433,7 @@ $nodeSelector.Add_SelectedIndexChanged({
   $script:selectedNode = $nodeSelector.SelectedItem
   $planLabel.Text = "$($script:selectedNode.region) · $($script:selectedNode.plan)"
   $lblId.Text='—'; $lblIp.Text='—'; $lblDns.Text='—'; $lblPort.Text='—'
+  $lblCreated.Text='—'; $lblAge.Text='—'; $script:createdAtUtc=$null
   Invoke-Action 'status'
 })
 $btnClear.Add_Click({
@@ -427,7 +449,7 @@ $btnStop.Add_Click({
   if ($r -eq [Windows.Forms.DialogResult]::Yes) { Invoke-Action 'stop' }
 })
 
-$form.Add_Shown({ Invoke-Action 'status' })
+$form.Add_Shown({ $ageTimer.Start(); Invoke-Action 'status' })
 
 $form.Add_FormClosing({
   param($s, $e)
@@ -444,6 +466,7 @@ try {
 } catch {
   [void][Windows.Forms.MessageBox]::Show("界面运行出错：`n$($_.Exception.Message)", '错误')
 } finally {
+  $ageTimer.Dispose()
   $timer.Dispose()
   $form.Dispose()
 }
