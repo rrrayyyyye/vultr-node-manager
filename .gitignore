@@ -32,3 +32,12 @@
 Thumbs.db
 desktop.ini
 __pycache__/
+
+# Android outputs, SDK paths and signing credentials
+**/build/
+**/.gradle/
+**/local.properties
+*.jks
+*.keystore
+*.apk
+/artifacts/

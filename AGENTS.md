@@ -2,6 +2,8 @@
 
 This is a Windows PowerShell 5.1 and Windows Forms project. Keep runtime code compatible with Windows PowerShell 5.1. Save `.ps1` files as UTF-8 with BOM for Chinese text; generated YAML must be UTF-8 without BOM. Shell templates use LF.
 
+The `android/` directory is a native Java Android app (minSdk 26). Preserve the existing nodes.json schema and Windows behavior. Android changes must pass unit tests, lint and the isolated emulator smoke checks documented in android/README.md. Signing keys/passwords must remain in ignored private-settings/ or encrypted CI Secrets, never source or APK assets. Preserve applicationId and release signing identity; increment versionCode for updates. Never use live cloud writes in emulator or unit tests.
+
 Private runtime settings are `nodes.json` and `vultr-api.key`. Never commit them, generated client configs, real bootstrap scripts, logs, deployment records or backups. Use `nodes.example.json` and mocked fixtures in tests.
 
 Run all test scripts documented in README before committing changes. Tests must not need real credentials or call live cloud APIs. Live status checks are read-only; never create or destroy real cloud resources as an automated test.

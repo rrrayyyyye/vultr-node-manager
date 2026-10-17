@@ -1,5 +1,7 @@
 # Vultr 多地区节点管理
 
+已加入原生安卓手机端：安装、导入配置和覆盖更新说明见 [android/README.md](android/README.md)，安装包在 [GitHub Releases](https://github.com/rrrayyyyye/vultr-node-manager/releases/latest)。手机和电脑共用同一组云端节点。
+
 Windows 桌面工具，通过 Vultr API 独立创建、查询和销毁东京、洛杉矶等地区的 sing-box 节点。固定 DuckDNS 域名跟随服务器 IP，客户端无需每次重建都修改地址。
 
 ## 在另一台 Windows 主机上使用
