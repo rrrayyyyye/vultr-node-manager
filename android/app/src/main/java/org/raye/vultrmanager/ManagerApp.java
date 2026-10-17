@@ -24,7 +24,7 @@ public final class ManagerApp extends Application {
     String accountError="尚未查询",setupError="";
     boolean refreshing=false,accountBusy=false,configured=false;
     Runnable listener;
-    private Cloud cloud;
+    Cloud cloud; // Package visibility allows the isolated instrumentation runner to inject a mock.
     private Vault vault;
     private JSONObject saved=new JSONObject();
     boolean demo=false;

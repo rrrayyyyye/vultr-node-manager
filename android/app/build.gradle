@@ -3,6 +3,7 @@ plugins { id 'com.android.application' }
 android {
     namespace 'org.raye.vultrmanager'
     compileSdk 35
+    buildToolsVersion '35.0.0'
     defaultConfig {
         applicationId 'org.raye.vultrmanager'
         minSdk 26

@@ -20,6 +20,10 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+          cache: gradle
+          cache-dependency-path: |
+            android/**/*.gradle
+            android/gradle/wrapper/gradle-wrapper.properties
       - name: Unit checks, Android lint, debug app and UI test app
         run: |
           chmod +x gradlew
@@ -35,6 +39,7 @@ jobs:
           trap 'rm -f "$ANDROID_KEYSTORE"' EXIT
           printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$ANDROID_KEYSTORE"
           ./gradlew --no-daemon assembleRelease
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk
           mkdir -p ../artifacts
           cp app/build/outputs/apk/release/app-release.apk ../artifacts/vultr-node-manager.apk
           sha256sum ../artifacts/vultr-node-manager.apk > ../artifacts/SHA256SUMS.txt
@@ -77,6 +82,7 @@ jobs:
             adb shell am instrument -w org.raye.vultrmanager.test/org.raye.vultrmanager.SmokeRunner | tee artifacts/instrumentation.txt
             grep -q 'smoke checks passed' artifacts/instrumentation.txt
             adb pull /sdcard/Android/data/org.raye.vultrmanager/files/. artifacts/screenshots/
+            if [ -f test-build/artifacts/vultr-node-manager.apk ]; then adb uninstall org.raye.vultrmanager; adb install test-build/artifacts/vultr-node-manager.apk; adb shell am start -W -n org.raye.vultrmanager/.MainActivity; sleep 2; adb shell uiautomator dump /sdcard/release-ui.xml; adb pull /sdcard/release-ui.xml artifacts/; grep -q '接入已有云端节点' artifacts/release-ui.xml; fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
