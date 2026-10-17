@@ -14,6 +14,15 @@ $NodeScript = Join-Path $Dir 'vultr-node.ps1'
 $NodeConfig = Get-Content -LiteralPath (Join-Path $Dir 'nodes.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 $script:selectedNode = @($NodeConfig.nodes | Where-Object { $_.id -eq $Node })[0]
 if (-not $script:selectedNode) { throw "找不到节点配置：$Node" }
+$script:pendingDeletes = @{}
+$script:confirmedDeletes = @{}
+
+function Get-PendingDeletion {
+  if ($null -ne $script:pendingDeletes -and $script:pendingDeletes.ContainsKey([string]$script:selectedNode.id)) {
+    return $script:pendingDeletes[[string]$script:selectedNode.id]
+  }
+  return $null
+}
 
 # ==================== 子进程调用 / 输出实时读取 ====================
 
@@ -30,6 +39,8 @@ function Start-NodeAction {
   $cmd = "[Console]::OutputEncoding=[Text.UTF8Encoding]::new(`$false); " +
          "`$OutputEncoding=[Text.UTF8Encoding]::new(`$false); " +
          "& '$escapedScript' '$Action' -Node '$escapedNode' -MachineStatus"
+  $confirmDeletion = $Action -eq 'status' -and $null -ne (Get-PendingDeletion)
+  if ($confirmDeletion) { $cmd += ' -ConfirmDeletion' }
   $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cmd))
 
   $proc = Start-Process -FilePath 'powershell.exe' `
@@ -41,7 +52,7 @@ function Start-NodeAction {
   # 保留句柄，确保 Windows PowerShell 能读取已退出的子进程退出码。
   $null = $proc.Handle
 
-  [pscustomobject]@{ Process = $proc; OutFile = $outFile; ErrFile = $errFile }
+  [pscustomobject]@{ Process = $proc; OutFile = $outFile; ErrFile = $errFile; ConfirmDeletion = $confirmDeletion }
 }
 
 function Read-NewText {
@@ -334,15 +345,23 @@ function Append-Log([string]$text) {
   # 子进程的行尾混用 CRLF / 孤立 LF，统一成 CRLF，否则文本框偶尔不换行
   $norm = ($text -replace "`r`n", "`n") -replace "`n", "`r`n"
   [void]$script:buf.Append($norm)
-  $visibleText = [regex]::Replace($norm, '(?m)^@@(?:NODE|ACCOUNT)_STATUS@@[^\r\n]*(?:\r?\n)?', '')
+  $visibleText = [regex]::Replace($norm, '(?m)^@@(?:NODE_STATUS|ACCOUNT_STATUS|NODE_STOP)@@[^\r\n]*(?:\r?\n)?', '')
   $log.AppendText($visibleText)
   $log.SelectionStart = $log.TextLength
   $log.ScrollToCaret()
+  # Apply complete markers as they arrive, before slower account requests finish.
+  if ($script:cur -eq 'status') {
+    if ($norm -match '(?m)^@@NODE_STATUS@@') { Update-Card $script:buf.ToString() }
+    if ($norm -match '(?m)^@@ACCOUNT_STATUS@@') { Update-AccountCard $script:buf.ToString() }
+  } elseif ($script:cur -eq 'stop' -and $norm -match '(?m)^@@NODE_STOP@@') {
+    Update-StopReceipt $script:buf.ToString()
+  }
 }
 
 function Set-Busy([bool]$b) {
-  $btnStart.Enabled   = -not $b
-  $btnStop.Enabled    = -not $b
+  $pending = $null -ne (Get-PendingDeletion)
+  $btnStart.Enabled   = -not $b -and -not $pending
+  $btnStop.Enabled    = -not $b -and -not $pending
   $btnRefresh.Enabled = -not $b
   $btnClear.Enabled   = -not $b
   $btnExport.Enabled  = -not $b
@@ -353,6 +372,28 @@ function Set-Busy([bool]$b) {
 function Update-NodeAge {
   $timing = Get-InstanceTiming $script:createdAtUtc
   $lblAge.Text = if ($null -ne $timing.ageSeconds) { Format-NodeAge $timing.ageSeconds } else { '—' }
+}
+
+function Show-PendingDeletion([string]$Message) {
+  $lblId.Text='—'; $lblIp.Text='—'; $lblDns.Text='—'; $lblPort.Text='—'
+  $lblCreated.Text='—'; $lblAge.Text='—'; $script:createdAtUtc=$null
+  $banner.Text="$($script:selectedNode.name) · $Message"; $banner.BackColor=$colBusy
+}
+
+function Update-StopReceipt([string]$Text) {
+  $markers=[regex]::Matches($Text, '(?m)^@@NODE_STOP@@([^\r\n]+)')
+  if ($markers.Count -eq 0) { return }
+  try { $receipt=$markers[$markers.Count-1].Groups[1].Value | ConvertFrom-Json } catch { return }
+  if ($receipt.node -ne $script:selectedNode.id) { return }
+  if ($receipt.state -eq 'absent') {
+    [void]$script:pendingDeletes.Remove([string]$receipt.node)
+    Show-PendingDeletion '未创建 / 已销毁'; $banner.BackColor=$colOff
+    $script:after=$null
+  } elseif ($receipt.state -eq 'submitted' -and -not [string]::IsNullOrWhiteSpace([string]$receipt.id)) {
+    if ($null -ne $script:confirmedDeletes) { [void]$script:confirmedDeletes.Remove([string]$receipt.node) }
+    $script:pendingDeletes[[string]$receipt.node]=[pscustomobject]@{id=$receipt.id;attempts=0}
+    Show-PendingDeletion '销毁请求已受理，正在确认'
+  }
 }
 
 function Format-UsdAmount([decimal]$Amount) {
@@ -385,6 +426,7 @@ function Update-Card([string]$t) {
   $lblId.Text='—'; $lblIp.Text='—'; $lblDns.Text='—'; $lblPort.Text='—'
   $lblCreated.Text='—'; $lblAge.Text='—'; $script:createdAtUtc=$null
   if ($markers.Count -eq 0) {
+    if ($null -ne (Get-PendingDeletion)) { Show-PendingDeletion '销毁请求已受理，等待网络恢复后确认'; return }
     $banner.Text = "$($script:selectedNode.name) · 查询失败，未确认云端状态"
     $banner.BackColor = $colWarn; return
   }
@@ -392,8 +434,22 @@ function Update-Card([string]$t) {
   catch { $banner.Text='状态数据无法解析'; $banner.BackColor=$colWarn; return }
   if ($data.node -ne $script:selectedNode.id) { $banner.Text='地区状态不匹配，请刷新'; $banner.BackColor=$colWarn; return }
   if (-not $data.exists) {
-    $banner.Text = "$($data.name) · 未创建 / 已销毁"
+    $wasPending=$null -ne (Get-PendingDeletion)
+    if ($wasPending) {
+      [void]$script:pendingDeletes.Remove([string]$data.node)
+      if ($null -eq $script:confirmedDeletes) { $script:confirmedDeletes=@{} }
+      $script:confirmedDeletes[[string]$data.node]=$true
+    }
+    $confirmed=$null -ne $script:confirmedDeletes -and $script:confirmedDeletes.ContainsKey([string]$data.node)
+    $banner.Text = if ($confirmed) { "$($data.name) · 已销毁" } else { "$($data.name) · 未创建 / 已销毁" }
     $banner.BackColor = $colOff; return
+  }
+  if ($null -ne $script:confirmedDeletes) { [void]$script:confirmedDeletes.Remove([string]$data.node) }
+  $pending = Get-PendingDeletion
+  if ($null -ne $pending) {
+    if ($pending.id -eq $data.id) { Show-PendingDeletion '云端正在销毁，稍后自动确认'; return }
+    # Another machine may already have recreated this region. Never act on its ID.
+    [void]$script:pendingDeletes.Remove([string]$data.node)
   }
   $lblId.Text = $data.id; $lblIp.Text = $data.ip
   $timing = Get-InstanceTiming ([string]$data.createdAtUtc)
@@ -425,6 +481,8 @@ function Invoke-Action([string]$action) {
   $script:busy  = $true
   $script:cur   = $action
   $script:after = if ($action -in @('start','stop')) { 'status' } else { $null }
+  $pending = Get-PendingDeletion
+  if ($action -eq 'status' -and $null -ne $pending) { $pending.attempts++ }
   [void]$script:buf.Clear()
   [void]$script:errBuf.Clear()
   $script:outOff = [long]0
@@ -433,7 +491,8 @@ function Invoke-Action([string]$action) {
   Append-Log ("`r`n===== {0}  ·  {1} · {2} =====`r`n" -f (Get-Date -Format 'HH:mm:ss'), $script:selectedNode.name, $names[$action])
   Set-Busy $true
   $statusLabel.Text = "正在 $($names[$action]) ..."
-  if ($action -ne 'export') { $banner.Text = "$($script:selectedNode.name) · 正在$($names[$action])"; $banner.BackColor = $colBusy }
+  if ($action -eq 'status' -and $null -ne $pending) { Show-PendingDeletion '正在确认销毁结果' }
+  elseif ($action -ne 'export') { $banner.Text = "$($script:selectedNode.name) · 正在$($names[$action])"; $banner.BackColor = $colBusy }
 
   try {
     $script:job = Start-NodeAction -Action $action
@@ -456,15 +515,29 @@ function Complete-Action {
   if ($errTxt.Trim()) { Append-Log ("[错误输出]`r`n" + $errTxt.TrimEnd() + "`r`n") }
   $script:job.Process.WaitForExit()
   $exitCode = $script:job.Process.ExitCode
-  if ($exitCode -ne 0) { Append-Log "操作未成功（退出码 $exitCode），请查看上方日志。`r`n" }
+  if ($exitCode -ne 0) {
+    if ($script:job.ConfirmDeletion -and $null -ne (Get-PendingDeletion)) {
+      Append-Log "销毁请求已受理；本次云端确认暂不可用，保留进度并稍后重试。`r`n"
+    } else { Append-Log "操作未成功（退出码 $exitCode），请查看上方日志。`r`n" }
+  }
   Remove-Item -LiteralPath $script:job.OutFile, $script:job.ErrFile -ErrorAction SilentlyContinue
 
   $cur = $script:cur
+  $confirmDeletion = $script:job.ConfirmDeletion
   $script:job   = $null
   $script:busy  = $false
   Set-Busy $false
   $statusLabel.Text = '就绪'
-  if ($cur -eq 'status') { Update-Card $script:buf.ToString(); Update-AccountCard $script:buf.ToString() }
+  if ($cur -eq 'status') {
+    Update-Card $script:buf.ToString()
+    if (-not $confirmDeletion) { Update-AccountCard $script:buf.ToString() }
+    Set-Busy $false
+    $pending = Get-PendingDeletion
+    if ($null -ne $pending) {
+      $statusLabel.Text = if ($pending.attempts -lt 3) { '销毁请求已受理，4 秒后自动确认' } else { '暂未确认销毁结果；网络恢复后点击刷新状态' }
+      if ($pending.attempts -lt 3) { $deletionTimer.Stop(); $deletionTimer.Start() }
+    }
+  }
 
   if ($script:after -eq 'status') { $script:after = $null; Invoke-Action 'status' }
 }
@@ -485,10 +558,16 @@ $timer.Add_Tick({
 $ageTimer = New-Object Windows.Forms.Timer
 $ageTimer.Interval = 1000
 $ageTimer.Add_Tick({ Update-NodeAge })
+$deletionTimer = New-Object Windows.Forms.Timer
+$deletionTimer.Interval = 4000
+$deletionTimer.Add_Tick({
+  $pending = Get-PendingDeletion
+  if (-not $script:busy -and $null -ne $pending -and $pending.attempts -lt 3) { Invoke-Action 'status' }
+})
 
 # ==================== 事件绑定 ====================
 $btnStart.Add_Click({ Invoke-Action 'start' })
-$btnRefresh.Add_Click({ Invoke-Action 'status' })
+$btnRefresh.Add_Click({ $pending=Get-PendingDeletion; if ($null -ne $pending) { $pending.attempts=0 }; Invoke-Action 'status' })
 $btnExport.Add_Click({ Invoke-Action 'export' })
 $nodeSelector.Add_SelectedIndexChanged({
   if ($script:busy -or -not $nodeSelector.SelectedItem) { return }
@@ -511,7 +590,7 @@ $btnStop.Add_Click({
   if ($r -eq [Windows.Forms.DialogResult]::Yes) { Invoke-Action 'stop' }
 })
 
-$form.Add_Shown({ $ageTimer.Start(); Invoke-Action 'status' })
+$form.Add_Shown({ $ageTimer.Start(); $deletionTimer.Start(); Invoke-Action 'status' })
 
 $form.Add_FormClosing({
   param($s, $e)
@@ -528,6 +607,7 @@ try {
 } catch {
   [void][Windows.Forms.MessageBox]::Show("界面运行出错：`n$($_.Exception.Message)", '错误')
 } finally {
+  $deletionTimer.Dispose()
   $ageTimer.Dispose()
   $timer.Dispose()
   $form.Dispose()

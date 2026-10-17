@@ -30,6 +30,7 @@ $script:lines=[Collections.Generic.List[string]]::new()
 $script:mode='empty'; $script:apiCalls=0
 $script:expectedTls=[Net.SecurityProtocolType]::Tls12
 $script:accountFailure=$false
+$script:transientFailures=0; $script:failMethod=''
 $script:accountPayload=[pscustomobject]@{balance=-25;pending_charges=[decimal]'1.25';name='private-name-fixture';email='private@example.invalid'}
 $fixture=[pscustomobject]@{id='tokyo-test';label=$Current.label;region='nrt';main_ip='192.0.2.1';status='active';power_status='running';date_created=([DateTimeOffset]::UtcNow.AddHours(-25)).ToString('o')}
 function Write-Host {
@@ -39,11 +40,16 @@ function Write-Host {
 function Test-Port443 { param($Ip) return $true }
 # Every HTTP request is intercepted, including DoH. No live credentials or networking.
 function Invoke-RestMethod {
-  param($Uri, $Method, $Headers, $TimeoutSec, $ContentType, $Body, $ErrorAction)
+  param($Uri, $Method, $Headers, $TimeoutSec, $ContentType, $Body, $ErrorAction, [switch]$DisableKeepAlive)
+  Assert-Task $DisableKeepAlive 'Management request can reuse a stale connection'
   $proxy=[Net.WebRequest]::DefaultWebProxy
   Assert-Task ($null -eq $proxy -or $proxy.IsBypassed([uri]$Uri)) 'Management request still uses a proxy'
   Assert-Task ([Net.ServicePointManager]::SecurityProtocol -eq $script:expectedTls) 'Unexpected request TLS settings'
   $script:requests.Add([pscustomobject]@{Uri=$Uri;Method=$Method;Body=$Body})
+  if ($script:transientFailures -gt 0 -and (-not $script:failMethod -or $Method -eq $script:failMethod)) {
+    $script:transientFailures--
+    throw [Net.WebException]::new('Simulated send failure', $null, [Net.WebExceptionStatus]::SendFailure, $null)
+  }
   if ($Uri -like 'https://223.5.5.5/*') { return [pscustomobject]@{Answer=@(@{type=1;data='192.0.2.1'})} }
   if ($Uri -eq "$Base/account") {
     if ($script:accountFailure) { throw [Net.WebException]::new('Simulated account permission denied') }
@@ -176,6 +182,78 @@ try {
   try { Write-RefreshStatus *> $null } catch {$failed=$true}
   Assert-Task ($failed -and @($script:lines | Where-Object {$_ -like '@@ACCOUNT_STATUS@@*'}).Count -eq 1) 'Node query failure blocked independent account refresh'
   Microsoft.PowerShell.Utility\Write-Host 'PASS: account card refreshes independently, clears stale balances and excludes personal account fields'
+
+  # Retry only safe reads. A write may have reached the server before disconnect.
+  $script:mode='empty'; $script:failMethod='Get'; $script:transientFailures=1; $script:requests.Clear()
+  $null=Invoke-Api '/instances?per_page=100'
+  Assert-Task ($script:requests.Count -eq 2) 'Transient read failure was not retried once'
+  foreach ($method in @('Post','Delete')) {
+    $script:failMethod=$method; $script:transientFailures=1; $script:requests.Clear(); $failed=$false
+    try {$null=Invoke-Api '/instances/fixture' $method} catch {$failed=$true}
+    Assert-Task ($failed -and $script:requests.Count -eq 1) 'An uncertain write was automatically repeated'
+  }
+  $script:transientFailures=0; $script:failMethod=''
+  Microsoft.PowerShell.Utility\Write-Host 'PASS: transient GET failure retries once; POST and DELETE never retry automatically'
+
+  # Confirmation reads must not wait for stale proxy-port, DNS or account checks.
+  $ConfirmDeletion=$true; $script:mode='present'; $script:requests.Clear(); $script:lines.Clear()
+  Write-RefreshStatus *> $null
+  Assert-Task ($script:requests.Count -eq 1 -and $script:requests[0].Uri -like '*/instances?*') 'Deletion confirmation waited for unrelated checks'
+  Assert-Task (@($script:lines | Where-Object {$_ -like '@@ACCOUNT_STATUS@@*'}).Count -eq 0) 'Fast confirmation queried the account'
+  $ConfirmDeletion=$false
+
+  $script:lines.Clear(); Stop-Node *> $null
+  $receiptMarker=$script:lines | Where-Object {$_ -like '@@NODE_STOP@@*'} | Select-Object -Last 1
+  Assert-Task ($receiptMarker -and $receiptMarker -like '*submitted*') 'Accepted DELETE did not produce a receipt'
+  $script:pendingDeletes=@{}; $colBusy='busy'
+  Update-StopReceipt $receiptMarker
+  Assert-Task ((Get-PendingDeletion).id -eq $fixture.id -and $banner.Text -like '*已受理*') 'GUI did not retain the accepted delete request'
+  Update-Card 'Connection interrupted after accepted delete'
+  Assert-Task ($banner.Text -like '*已受理*' -and $banner.Text -notlike '*查询失败*' -and $banner.Text -notlike '*已销毁*') 'Transient confirmation failure erased progress or falsely confirmed deletion'
+  Update-Card ('@@NODE_STATUS@@'+($present | ConvertTo-Json -Compress))
+  Assert-Task ($banner.Text -like '*正在销毁*' -and $lblAge.Text -eq '—') 'Provider still listing the old instance was shown as running'
+  foreach ($controlName in @('btnStart','btnStop','btnRefresh','btnClear','btnExport','nodeSelector','progress')) {
+    Set-Variable -Name $controlName -Value ([pscustomobject]@{Enabled=$false;Visible=$false}) -Scope Script
+  }
+  Set-Busy $false
+  Assert-Task (-not $btnStart.Enabled -and -not $btnStop.Enabled -and $btnRefresh.Enabled) 'Pending deletion allowed conflicting create/delete actions'
+
+  # A streamed node result must update now, before the account child finishes.
+  $script:buf=New-Object Text.StringBuilder; $script:cur='status'
+  $log=[pscustomobject]@{TextLength=0;SelectionStart=0;Messages=[Collections.Generic.List[string]]::new()}
+  $log | Add-Member -MemberType ScriptMethod -Name AppendText -Value {param($text) $this.Messages.Add($text)}
+  $log | Add-Member -MemberType ScriptMethod -Name ScrollToCaret -Value {}
+  Append-Log ('@@NODE_STATUS@@'+($absent | ConvertTo-Json -Compress)+"`n")
+  Assert-Task ($null -eq (Get-PendingDeletion) -and $banner.Text -like '*已销毁*') 'Streamed deletion result waited for the account request'
+  Update-Card ('@@NODE_STATUS@@'+($absent | ConvertTo-Json -Compress))
+  Assert-Task ($banner.Text -eq ($Current.name+' · 已销毁')) 'Completion replay erased a confirmed deletion status'
+  Assert-Task (($log.Messages -join '') -notmatch '@@NODE_STATUS@@') 'Machine status markers leaked into visible logs'
+  Set-Busy $false
+  Assert-Task ($btnStart.Enabled -and $btnStop.Enabled) 'Confirmed deletion kept node actions disabled'
+
+  Update-StopReceipt $receiptMarker
+  $newInstance=$present | ConvertTo-Json -Compress | ConvertFrom-Json
+  $newInstance.id='recreated-by-another-machine'
+  Update-Card ('@@NODE_STATUS@@'+($newInstance | ConvertTo-Json -Compress))
+  Assert-Task ($null -eq (Get-PendingDeletion) -and $lblId.Text -eq $newInstance.id) 'Pending deletion incorrectly hid a newly recreated instance'
+  Update-StopReceipt $receiptMarker
+  $script:selectedNode=$Config.nodes[1]
+  Assert-Task ($null -eq (Get-PendingDeletion) -and $script:pendingDeletes.ContainsKey($Current.id)) 'Pending deletion leaked across regions'
+  $script:selectedNode=$Current
+  $script:pendingDeletes=@{}; $script:lines.Clear(); $script:mode='present'; $script:failMethod='Delete'; $script:transientFailures=1
+  $failed=$false
+  try {Stop-Node *> $null} catch {$failed=$true}
+  Assert-Task ($failed -and @($script:lines | Where-Object {$_ -like '@@NODE_STOP@@*'}).Count -eq 0) 'Failed DELETE fabricated an accepted receipt'
+  $script:transientFailures=0; $script:failMethod=''
+  Microsoft.PowerShell.Utility\Write-Host 'PASS: accepted deletion survives outages, confirms from streaming results, isolates regions and respects recreation'
+
+  $OutputPath=Join-Path ([IO.Path]::GetTempPath()) ('vultr-routes-fixture-'+[guid]::NewGuid().ToString('N')+'.yaml')
+  try {
+    Write-ClientYaml
+    $exported=[IO.File]::ReadAllText($OutputPath)
+    Assert-Task ($exported.Contains('DOMAIN,api.vultr.com,DIRECT') -and $exported.IndexOf('DOMAIN,api.vultr.com,DIRECT') -lt $exported.IndexOf('MATCH,PROXY') -and $exported.Contains('IP-CIDR,223.5.5.5/32,DIRECT,no-resolve')) 'Exported profile can send management requests through the managed node'
+  } finally {Remove-Item -LiteralPath $OutputPath -ErrorAction SilentlyContinue}
+  Microsoft.PowerShell.Utility\Write-Host 'PASS: exported profiles route management API and DNS directly before proxy fallback'
 } finally {
   [Net.WebRequest]::DefaultWebProxy=$originalProxy
   [Net.ServicePointManager]::SecurityProtocol=$originalTls

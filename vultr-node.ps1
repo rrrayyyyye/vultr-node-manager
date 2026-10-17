@@ -3,7 +3,7 @@
 param(
   [Parameter(Mandatory = $true)]
   [ValidateSet('start', 'stop', 'status', 'export')][string]$Action,
-  [string]$Node = 'tokyo', [switch]$MachineStatus, [string]$OutputPath
+  [string]$Node = 'tokyo', [switch]$MachineStatus, [string]$OutputPath, [switch]$ConfirmDeletion
 )
 $ErrorActionPreference = 'Stop'
 $Dir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -29,19 +29,37 @@ function Invoke-ManagementRequest {
       $modernTls = [int]$previousTls -band (3072 -bor 12288)
       [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]($modernTls -bor 3072)
     }
-    Invoke-RestMethod @Request -ErrorAction Stop
+    Invoke-RestMethod @Request -DisableKeepAlive -ErrorAction Stop
   } finally {
     [Net.WebRequest]::DefaultWebProxy = $previousProxy
     [Net.ServicePointManager]::SecurityProtocol = $previousTls
   }
 }
 
+function Test-TransientApiError([Exception]$Exception) {
+  for ($errorItem=$Exception; $null -ne $errorItem; $errorItem=$errorItem.InnerException) {
+    if ($errorItem -is [Net.WebException]) {
+      return $null -eq $errorItem.Response -and $errorItem.Status.ToString() -in @('SendFailure','ReceiveFailure','ConnectionClosed','ConnectFailure','Timeout','NameResolutionFailure','KeepAliveFailure','PipelineFailure','SecureChannelFailure')
+    }
+  }
+  return $false
+}
+
 function Invoke-Api {
-  param([string]$Path, [string]$Method = 'Get', $Body = $null, [int]$TimeoutSec = 60)
+  param([string]$Path, [string]$Method = 'Get', $Body = $null, [int]$TimeoutSec = 0, [int]$ReadAttempts = 2)
+  if ($TimeoutSec -le 0) { $TimeoutSec = if ($Method -eq 'Get') { 8 } else { 60 } }
   $apiArgs = @{ Uri = "$Base$Path"; Method = $Method; Headers = $Headers; TimeoutSec = $TimeoutSec }
   if ($null -ne $Body) { $apiArgs.ContentType = 'application/json'; $apiArgs.Body = ($Body | ConvertTo-Json -Depth 8) }
-  try { Invoke-ManagementRequest $apiArgs }
-  catch { throw "Vultr API 直连请求失败：$($_.Exception.Message) 请检查本机直连网络、TLS 和 API 来源 IP 限制；未确认云端操作结果。" }
+  $attempts = if ($Method -eq 'Get') { [math]::Max(1,$ReadAttempts) } else { 1 }
+  for ($attempt=1; $attempt -le $attempts; $attempt++) {
+    try { return (Invoke-ManagementRequest $apiArgs) }
+    catch {
+      if ($attempt -lt $attempts -and (Test-TransientApiError $_.Exception)) {
+        Write-Host "管理连接短暂中断，1 秒后重试只读查询（$attempt/$attempts）。" -ForegroundColor Yellow
+        Start-Sleep -Seconds 1
+      } else { throw "Vultr API 请求失败：$($_.Exception.Message) 已绕过系统 HTTP 代理；若使用 FlClash 全局/TUN，请确保管理 API 有可用直连路由。" }
+    }
+  }
 }
 
 function Get-AllInstances {
@@ -84,6 +102,7 @@ function Write-ClientYaml {
   @('# Vultr 多地区节点；含连接凭据，请勿公开分享。',
     'mixed-port: 7890', 'allow-lan: false', 'mode: rule', 'log-level: info', 'ipv6: false',
     'dns:', '  enable: true', '  enhanced-mode: fake-ip', '  fake-ip-range: 198.18.0.1/16',
+    '  fake-ip-filter:', '    - api.vultr.com',
     '  nameserver:', '    - https://223.5.5.5/dns-query', '    - https://1.1.1.1/dns-query',
     '  proxy-server-nameserver:', '    - https://223.5.5.5/dns-query', '    - https://1.1.1.1/dns-query',
     'proxies:') | ForEach-Object { $lines.Add($_) }
@@ -98,7 +117,7 @@ function Write-ClientYaml {
   }
   @('proxy-groups:', '  - name: PROXY', '    type: select', '    proxies:') | ForEach-Object { $lines.Add($_) }
   foreach ($entry in $Config.nodes) { $lines.Add('      - ' + (ConvertTo-Json -InputObject ([string]$entry.linkName) -Compress)) }
-  @('rules:', '  - GEOIP,CN,DIRECT', '  - MATCH,PROXY') | ForEach-Object { $lines.Add($_) }
+  @('rules:', '  - DOMAIN,api.vultr.com,DIRECT', '  - IP-CIDR,223.5.5.5/32,DIRECT,no-resolve', '  - IP-CIDR,1.1.1.1/32,DIRECT,no-resolve', '  - GEOIP,CN,DIRECT', '  - MATCH,PROXY') | ForEach-Object { $lines.Add($_) }
   $parent = Split-Path -Parent ([IO.Path]::GetFullPath($OutputPath))
   [void][IO.Directory]::CreateDirectory($parent)
   [IO.File]::WriteAllText($OutputPath, ($lines -join "`r`n") + "`r`n", [Text.UTF8Encoding]::new($false))
@@ -135,8 +154,10 @@ function Write-Status {
     $instance = $instances[0]
     $result.exists = $true; $result.id = $instance.id; $result.ip = $instance.main_ip
     $result.status = $instance.status; $result.powerStatus = $instance.power_status
-    $result.port443 = Test-Port443 $instance.main_ip
-    $result.dnsIp = Get-DnsIp
+    if (-not $ConfirmDeletion) {
+      $result.port443 = Test-Port443 $instance.main_ip
+      $result.dnsIp = Get-DnsIp
+    }
     $result.dnsMatches = [bool]($result.dnsIp -and $result.dnsIp -eq $instance.main_ip)
     $timing = Get-InstanceTiming ([string]$instance.date_created)
     $result.createdAtUtc = $timing.createdAtUtc; $result.ageSeconds = $timing.ageSeconds
@@ -154,7 +175,7 @@ function Write-Status {
 }
 
 function Get-AccountBalance {
-  $account = (Invoke-Api '/account' -TimeoutSec 15).account
+  $account = (Invoke-Api '/account' -TimeoutSec 6 -ReadAttempts 1).account
   $amounts = @{}
   foreach ($field in @('balance', 'pending_charges')) {
     $number = [decimal]0
@@ -187,7 +208,8 @@ function Write-AccountStatus {
 function Write-RefreshStatus {
   # Account permission/network failure must not hide a confirmed node state,
   # and a failed node query must still allow an independent account result.
-  try { Write-Status } finally { Write-AccountStatus }
+  if ($ConfirmDeletion) { Write-Status }
+  else { try { Write-Status } finally { Write-AccountStatus } }
 }
 
 function Start-Node {
@@ -236,11 +258,23 @@ function Start-Node {
 
 function Stop-Node {
   $instances = @(Get-Node)
-  if ($instances.Count -eq 0) { Write-Host "$($Current.name)没有实例，无需操作。"; return }
+  if ($instances.Count -eq 0) {
+    Write-Host "$($Current.name)没有实例，无需操作。"
+    Write-StopReceipt '' 'absent'
+    return
+  }
   $instance = $instances[0]
   Write-Host "正在销毁 $($Current.name)：$($instance.id) ($($instance.main_ip)) ..."
   $null = Invoke-Api "/instances/$($instance.id)" 'Delete'
+  Write-StopReceipt $instance.id 'submitted'
   Write-Host '已提交销毁请求，随后刷新状态确认。' -ForegroundColor Green
+}
+
+function Write-StopReceipt([string]$InstanceId, [string]$State) {
+  if ($MachineStatus) {
+    $receipt=[ordered]@{node=$Current.id;name=$Current.name;id=$InstanceId;state=$State;requestedAtUtc=[DateTimeOffset]::UtcNow.ToString('o')}
+    Write-Host ('@@NODE_STOP@@'+($receipt | ConvertTo-Json -Compress))
+  }
 }
 
 $mutex = $null; $locked = $false
