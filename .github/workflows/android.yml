@@ -42,7 +42,7 @@ jobs:
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk
           mkdir -p ../artifacts
           cp app/build/outputs/apk/release/app-release.apk ../artifacts/vultr-node-manager.apk
-          sha256sum ../artifacts/vultr-node-manager.apk > ../artifacts/SHA256SUMS.txt
+          (cd ../artifacts && sha256sum vultr-node-manager.apk > SHA256SUMS.txt)
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: android-build
@@ -77,6 +77,9 @@ jobs:
           disable-animations: true
           script: |
             mkdir -p artifacts/screenshots
+            adb shell am force-stop com.android.launcher3
+            adb shell input keyevent KEYCODE_WAKEUP
+            adb shell wm dismiss-keyguard
             adb install test-build/android/app/build/outputs/apk/debug/app-debug.apk
             adb install test-build/android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
             adb shell am instrument -w org.raye.vultrmanager.test/org.raye.vultrmanager.SmokeRunner | tee artifacts/instrumentation.txt
