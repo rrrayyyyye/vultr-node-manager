@@ -87,6 +87,7 @@ public final class MainActivity extends Activity {
         LinearLayout r=row();r.setGravity(Gravity.BOTTOM);TextView amount=text(app.balance==null?"—":Models.money(app.balance.remaining()),42,0xffffffff,true);r.addView(amount);TextView usd=text("  USD",13,0xffc8dbff,true);r.addView(usd);add(c,r,13);
         add(c,text(app.balance==null?"导入配置后，刷新读取 Vultr 账户":"预存 $"+Models.money(app.balance.credit())+"    待结算 $"+Models.money(app.balance.pending()),13,0xffd9e6ff,false),16);
         add(body,label(app.accountBusy?"正在查询账户…":!app.accountError.isEmpty()&&app.configured?"账户："+app.accountError+(app.balance==null?"":"（上次金额已保留）"):app.balance==null?"所有地区共用账户余额":"全账户 · 更新于 "+Models.localTime(app.balance.checked())),8);
+        if(app.balance!=null&&!app.accountError.isEmpty())add(body,label("上次成功查询："+Models.localTime(app.balance.checked())),5);
     }
     private void home(){
         header("VULTR / PERSONAL","我的节点",false,app::refresh);balanceCard();
@@ -97,7 +98,7 @@ public final class MainActivity extends Activity {
             if(s.instance!=null&&s.verified&&s.pending==null){add(c,label("已开时长"),17);clock(c,s.instance.created(),32);add(c,label(s.basic),10);}
             else if(s.pending!=null)add(c,label("正在等待 Vultr 确认；网络失败不会当作已销毁。可手动刷新。"),10);
             else if(s.instance==null&&s.verified)add(c,label("当前地区没有实例，不再产生该实例费用。"),10);
-            TextView open=button(s.instance==null&&s.verified?"开节点":"查看详情",s.instance==null&&s.verified?BLUE:PALE,s.instance==null&&s.verified?0xffffffff:BLUE,()->{if(s.instance==null&&s.verified)confirmCreate(n);else {detail=n.id();render();}});add(c,open,18);disable(open,s.busy||app.refreshing);
+            TextView open=button(s.instance==null&&s.verified?"开节点":"查看详情",s.instance==null&&s.verified?BLUE:PALE,s.instance==null&&s.verified?0xffffffff:BLUE,()->{if(s.instance==null&&s.verified)confirmCreate(n);else {detail=n.id();render();}});add(c,open,18);disable(open,s.busy||app.refreshing||(s.instance==null&&s.verified&&(app.busy()||app.demo)));
         }
         TextView export=button("导出全部 FlClash 配置  ↗",0xffffffff,BLUE,()->export(app.nodes));add(body,export,18);
         add(body,label("时长从云端创建时间起算，包含关机期间。其他设备开关后，请刷新确认。"),14);

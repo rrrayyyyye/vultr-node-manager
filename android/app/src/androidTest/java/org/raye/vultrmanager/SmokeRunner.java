@@ -35,7 +35,24 @@ public final class SmokeRunner extends Instrumentation {
     private TextView find(View v,String label){if(v instanceof TextView&&((TextView)v).getText().toString().equals(label))return(TextView)v;if(v instanceof ViewGroup){ViewGroup g=(ViewGroup)v;for(int i=0;i<g.getChildCount();i++){TextView found=find(g.getChildAt(i),label);if(found!=null)return found;}}return null;}
     private void assertText(Activity a,String label){runOnMainSync(()->{if(find(a.getWindow().getDecorView(),label)==null)throw new AssertionError("Missing UI: "+label);});}
     private void click(Activity a,String label){runOnMainSync(()->{TextView v=find(a.getWindow().getDecorView(),label);if(v==null)throw new AssertionError("Missing action: "+label);View target=v;while(!target.isClickable()&&target.getParent() instanceof View)target=(View)target.getParent();target.performClick();});waitForIdleSync();}
-    private void screenshot(String filename)throws Exception{android.view.accessibility.AccessibilityNodeInfo window=getUiAutomation().getRootInActiveWindow();if(window==null||!"org.raye.vultrmanager".contentEquals(window.getPackageName()))throw new AssertionError("A system window is obscuring the app");window.recycle();Bitmap b=getUiAutomation().takeScreenshot();if(b==null)throw new AssertionError("Screenshot unavailable");try(OutputStream out=new FileOutputStream(new File(getTargetContext().getExternalFilesDir(null),filename))){b.compress(Bitmap.CompressFormat.PNG,100,out);}b.recycle();}
+    private void screenshot(String filename)throws Exception{
+        String active="null";boolean visible=false;
+        for(int attempt=0;attempt<20;attempt++){
+            try{getUiAutomation().waitForIdle(250,3000);}catch(java.util.concurrent.TimeoutException ignored){}
+            android.view.accessibility.AccessibilityNodeInfo window=getUiAutomation().getRootInActiveWindow();
+            if(window!=null){active=String.valueOf(window.getPackageName());visible="org.raye.vultrmanager".equals(active);
+                // Only dismiss the emulator's launcher ANR, never an error from the app under test.
+                for(android.view.accessibility.AccessibilityNodeInfo title:window.findAccessibilityNodeInfosByViewId("android:id/alertTitle")){
+                    String value=String.valueOf(title.getText());
+                    if(value.contains("Quickstep")||value.contains("Launcher"))for(android.view.accessibility.AccessibilityNodeInfo close:window.findAccessibilityNodeInfosByViewId("android:id/aerr_close"))close.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK);
+                }
+                window.recycle();
+            }
+            if(visible)break;Thread.sleep(250);
+        }
+        Bitmap b=getUiAutomation().takeScreenshot();if(b==null)throw new AssertionError("Screenshot unavailable");try(OutputStream out=new FileOutputStream(new File(getTargetContext().getExternalFilesDir(null),filename))){b.compress(Bitmap.CompressFormat.PNG,100,out);}b.recycle();
+        if(!visible)throw new AssertionError("Active accessibility window is "+active+", expected the app");
+    }
     private void checkPendingLifecycle(ManagerApp app,Models.Node node)throws Exception{
         runOnMainSync(()->{app.demo=false;ManagerApp.State s=app.states.get(node.id());s.pending=new Models.Pending("old-id",true);app.cloud=new Cloud((m,p,b,t)->{throw new IOException("synthetic offline test");});app.refresh();});
         awaitRefresh(app);
