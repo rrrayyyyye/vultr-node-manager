@@ -135,8 +135,8 @@ $colBtnPl = [Drawing.Color]::FromArgb(232, 234, 238)
 
 $form = New-Object Windows.Forms.Form
 $form.Text = 'Vultr 多地区节点管理 · 东京 / 洛杉矶'
-$form.ClientSize = New-Object Drawing.Size(850, 704)
-$form.MinimumSize = New-Object Drawing.Size(830, 614)
+$form.ClientSize = New-Object Drawing.Size(900, 786)
+$form.MinimumSize = New-Object Drawing.Size(880, 696)
 $form.StartPosition = 'CenterScreen'
 $form.Font = New-Object Drawing.Font('Microsoft YaHei UI', 9)
 $form.BackColor = $colFace
@@ -144,11 +144,12 @@ $form.BackColor = $colFace
 $root = New-Object Windows.Forms.TableLayoutPanel
 $root.Dock = 'Fill'
 $root.ColumnCount = 1
-$root.RowCount = 6
+$root.RowCount = 7
 [void]$root.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Percent, 100)))
 [void]$root.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Absolute, 74)))
+[void]$root.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Absolute, 136)))
 [void]$root.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Absolute, 48)))
-[void]$root.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Absolute, 158)))
+[void]$root.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Absolute, 104)))
 [void]$root.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Absolute, 58)))
 [void]$root.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Percent, 100)))
 [void]$root.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Absolute, 26)))
@@ -164,6 +165,45 @@ $banner.Font = New-Object Drawing.Font('Microsoft YaHei UI', 18, [Drawing.FontSt
 $banner.ForeColor = [Drawing.Color]::White
 $banner.BackColor = $colOff
 [void]$root.Controls.Add($banner, 0, 0)
+
+# ---- 显眼的时长和账户余额；账户数据属于全部地区 ----
+$metrics = New-Object Windows.Forms.TableLayoutPanel
+$metrics.Dock = 'Fill'
+$metrics.ColumnCount = 2; $metrics.RowCount = 1
+$metrics.Padding = New-Object Windows.Forms.Padding(18, 10, 18, 0)
+[void]$metrics.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Percent, 58)))
+[void]$metrics.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Percent, 42)))
+[void]$root.Controls.Add($metrics, 0, 1)
+
+function New-MetricCard([string]$Title, [int]$Column, $Accent) {
+  $card = New-Object Windows.Forms.TableLayoutPanel
+  $card.Dock='Fill'; $card.ColumnCount=1; $card.RowCount=4
+  $card.Padding=New-Object Windows.Forms.Padding(12, 4, 12, 4)
+  $card.Margin=New-Object Windows.Forms.Padding(0, 0, 8, 0)
+  $card.BackColor=[Drawing.Color]::White
+  foreach ($height in @(22, 44, 24, 22)) { [void]$card.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Absolute, $height))) }
+  $labels=@()
+  for ($i=0; $i -lt 4; $i++) {
+    $label=New-Object Windows.Forms.Label
+    $label.Dock='Fill'; $label.TextAlign='MiddleLeft'; $label.AutoEllipsis=$true
+    $label.Margin=New-Object Windows.Forms.Padding(0)
+    $label.ForeColor=$colInk
+    if ($i -eq 0) { $label.Text=$Title }
+    elseif ($i -eq 1) { $label.Text='—'; $label.Font=New-Object Drawing.Font('Microsoft YaHei UI', 22, [Drawing.FontStyle]::Bold); $label.ForeColor=$Accent }
+    else { $label.Font=New-Object Drawing.Font('Microsoft YaHei UI', 8); $label.ForeColor=$colOff }
+    [void]$card.Controls.Add($label, 0, $i)
+    $labels+=$label
+  }
+  [void]$metrics.Controls.Add($card, $Column, 0)
+  return ,$labels
+}
+$ageLabels=New-MetricCard '当前地区 · 已开时长' 0 $colBusy
+$lblAge=$ageLabels[1]; $lblCreated=$ageLabels[2]
+$ageLabels[3].Text='自云端创建起算；其他设备销毁后请刷新'
+$balanceLabels=New-MetricCard '账户预计剩余（USD）' 1 $colOk
+$lblBalance=$balanceLabels[1]; $lblBalanceDetail=$balanceLabels[2]; $lblBalanceUpdated=$balanceLabels[3]
+$lblBalanceDetail.Text='正在查询账户余额'
+$script:createdAtUtc=$null
 
 # ---- 地区选择：所有动作仅针对当前选择 ----
 $selectorBar = New-Object Windows.Forms.FlowLayoutPanel
@@ -184,20 +224,20 @@ $planLabel.AutoSize = $true
 $planLabel.Margin = New-Object Windows.Forms.Padding(16, 5, 0, 0)
 $planLabel.Text = "$($script:selectedNode.region) · $($script:selectedNode.plan)"
 $selectorBar.Controls.AddRange(@($selectorLabel, $nodeSelector, $planLabel))
-[void]$root.Controls.Add($selectorBar, 0, 1)
+[void]$root.Controls.Add($selectorBar, 0, 2)
 
-# ---- 详情：含云端创建时间与实例存续时长 ----
+# ---- 实例连接详情 ----
 $details = New-Object Windows.Forms.TableLayoutPanel
 $details.Dock = 'Fill'
 $details.ColumnCount = 2
-$details.RowCount = 6
+$details.RowCount = 4
 $details.Padding = New-Object Windows.Forms.Padding(18, 6, 18, 6)
 [void]$details.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Absolute, 96)))
 [void]$details.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Percent, 100)))
 for ($i = 0; $i -lt $details.RowCount; $i++) { [void]$details.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Percent, (100.0 / $details.RowCount)))) }
-[void]$root.Controls.Add($details, 0, 2)
+[void]$root.Controls.Add($details, 0, 3)
 
-$detailNames = @('实例 ID', '公网 IP', '域名解析', '443 端口', '创建时间', '已开时长')
+$detailNames = @('实例 ID', '公网 IP', '域名解析', '443 端口')
 $detailValues = @{}
 for ($i = 0; $i -lt $detailNames.Count; $i++) {
   $lk = New-Object Windows.Forms.Label
@@ -219,9 +259,6 @@ $lblId   = $detailValues['实例 ID']
 $lblIp   = $detailValues['公网 IP']
 $lblDns  = $detailValues['域名解析']
 $lblPort = $detailValues['443 端口']
-$lblCreated = $detailValues['创建时间']
-$lblAge = $detailValues['已开时长']
-$script:createdAtUtc = $null
 
 # ---- 按钮条 ----
 $bar = New-Object Windows.Forms.FlowLayoutPanel
@@ -229,7 +266,7 @@ $bar.Dock = 'Fill'
 $bar.WrapContents = $false
 $bar.BackColor = $colFace
 $bar.Padding = New-Object Windows.Forms.Padding(18, 10, 18, 8)
-[void]$root.Controls.Add($bar, 0, 3)
+[void]$root.Controls.Add($bar, 0, 4)
 
 function New-Btn([string]$text, $bg, $fg) {
   $b = New-Object Windows.Forms.Button
@@ -271,7 +308,7 @@ $log.BackColor = [Drawing.Color]::FromArgb(24, 26, 30)
 $log.ForeColor = [Drawing.Color]::FromArgb(214, 220, 230)
 $log.Font = New-Object Drawing.Font('Consolas', 9)
 $log.Margin = New-Object Windows.Forms.Padding(18, 0, 18, 10)
-[void]$root.Controls.Add($log, 0, 4)
+[void]$root.Controls.Add($log, 0, 5)
 
 # ---- 底部状态文字 ----
 $statusLabel = New-Object Windows.Forms.Label
@@ -280,7 +317,7 @@ $statusLabel.TextAlign = 'MiddleLeft'
 $statusLabel.Padding = New-Object Windows.Forms.Padding(18, 0, 0, 0)
 $statusLabel.ForeColor = [Drawing.Color]::FromArgb(110, 114, 122)
 $statusLabel.Text = '就绪'
-[void]$root.Controls.Add($statusLabel, 0, 5)
+[void]$root.Controls.Add($statusLabel, 0, 6)
 
 # ==================== 运行状态 ====================
 $script:busy   = $false
@@ -297,7 +334,7 @@ function Append-Log([string]$text) {
   # 子进程的行尾混用 CRLF / 孤立 LF，统一成 CRLF，否则文本框偶尔不换行
   $norm = ($text -replace "`r`n", "`n") -replace "`n", "`r`n"
   [void]$script:buf.Append($norm)
-  $visibleText = [regex]::Replace($norm, '(?m)^@@NODE_STATUS@@[^\r\n]*(?:\r?\n)?', '')
+  $visibleText = [regex]::Replace($norm, '(?m)^@@(?:NODE|ACCOUNT)_STATUS@@[^\r\n]*(?:\r?\n)?', '')
   $log.AppendText($visibleText)
   $log.SelectionStart = $log.TextLength
   $log.ScrollToCaret()
@@ -315,7 +352,32 @@ function Set-Busy([bool]$b) {
 
 function Update-NodeAge {
   $timing = Get-InstanceTiming $script:createdAtUtc
-  $lblAge.Text = if ($null -ne $timing.ageSeconds) { (Format-NodeAge $timing.ageSeconds) + '（自创建起）' } else { '—' }
+  $lblAge.Text = if ($null -ne $timing.ageSeconds) { Format-NodeAge $timing.ageSeconds } else { '—' }
+}
+
+function Format-UsdAmount([decimal]$Amount) {
+  return 'US$ ' + $Amount.ToString('0.00', [Globalization.CultureInfo]::InvariantCulture)
+}
+
+function Update-AccountCard([string]$Text) {
+  $lblBalance.Text='—'; $lblBalance.ForeColor=$colWarn
+  $lblBalanceDetail.Text='账户余额查询失败'; $lblBalanceUpdated.Text='点击刷新状态重试'
+  $markers=[regex]::Matches($Text, '(?m)^@@ACCOUNT_STATUS@@([^\r\n]+)')
+  if ($markers.Count -eq 0) { return }
+  try {
+    $data=$markers[$markers.Count-1].Groups[1].Value | ConvertFrom-Json
+    if (-not $data.available) { return }
+    foreach ($field in @('creditUSD','pendingChargesUSD','estimatedRemainingUSD')) {
+      if ($null -eq $data.$field) { return }
+    }
+    $amount=[decimal]$data.estimatedRemainingUSD
+    $credit=[decimal]$data.creditUSD; $pending=[decimal]$data.pendingChargesUSD
+    $updated=([DateTimeOffset]::Parse($data.checkedAtUtc)).ToLocalTime().ToString('HH:mm:ss')
+    $lblBalance.Text=Format-UsdAmount $amount
+    $lblBalance.ForeColor=if ($amount -gt 0) { $colOk } else { $colWarn }
+    $lblBalanceDetail.Text='预存 '+(Format-UsdAmount $credit)+' · 待结算 '+(Format-UsdAmount $pending)
+    $lblBalanceUpdated.Text='账户全部地区合计 · 更新于 '+$updated
+  } catch { return }
 }
 
 function Update-Card([string]$t) {
@@ -402,7 +464,7 @@ function Complete-Action {
   $script:busy  = $false
   Set-Busy $false
   $statusLabel.Text = '就绪'
-  if ($cur -eq 'status') { Update-Card $script:buf.ToString() }
+  if ($cur -eq 'status') { Update-Card $script:buf.ToString(); Update-AccountCard $script:buf.ToString() }
 
   if ($script:after -eq 'status') { $script:after = $null; Invoke-Action 'status' }
 }

@@ -29,6 +29,8 @@ $script:requests=[Collections.Generic.List[object]]::new()
 $script:lines=[Collections.Generic.List[string]]::new()
 $script:mode='empty'; $script:apiCalls=0
 $script:expectedTls=[Net.SecurityProtocolType]::Tls12
+$script:accountFailure=$false
+$script:accountPayload=[pscustomobject]@{balance=-25;pending_charges=[decimal]'1.25';name='private-name-fixture';email='private@example.invalid'}
 $fixture=[pscustomobject]@{id='tokyo-test';label=$Current.label;region='nrt';main_ip='192.0.2.1';status='active';power_status='running';date_created=([DateTimeOffset]::UtcNow.AddHours(-25)).ToString('o')}
 function Write-Host {
   param([Parameter(Position=0,ValueFromRemainingArguments=$true)]$Object, $ForegroundColor)
@@ -43,6 +45,10 @@ function Invoke-RestMethod {
   Assert-Task ([Net.ServicePointManager]::SecurityProtocol -eq $script:expectedTls) 'Unexpected request TLS settings'
   $script:requests.Add([pscustomobject]@{Uri=$Uri;Method=$Method;Body=$Body})
   if ($Uri -like 'https://223.5.5.5/*') { return [pscustomobject]@{Answer=@(@{type=1;data='192.0.2.1'})} }
+  if ($Uri -eq "$Base/account") {
+    if ($script:accountFailure) { throw [Net.WebException]::new('Simulated account permission denied') }
+    return [pscustomobject]@{account=$script:accountPayload}
+  }
   $script:apiCalls++
   switch ($script:mode) {
     'error' { throw [Net.WebException]::new('Simulated disconnected upstream proxy') }
@@ -138,6 +144,38 @@ try {
   Assert-Task ($banner.BackColor -eq $colOk -and $lblAge.Text -eq '—') 'Missing creation time broke otherwise valid node status'
   Microsoft.PowerShell.Utility\Write-Host 'PASS: lifetime ticks locally and clears on deletion, failed refresh or missing creation timestamp'
   Microsoft.PowerShell.Utility\Write-Host 'PASS: GUI distinguishes confirmed deletion from unknown status after query failure'
+
+  # Ledger credit is negative; pending usage is not yet deducted. Never use abs().
+  foreach ($case in @(@(-25,1.25,23.75),@(0,0,0),@(2,0.5,-2.5),@(-1,1.5,-0.5))) {
+    $script:accountPayload.balance=$case[0]; $script:accountPayload.pending_charges=$case[1]
+    $balance=Get-AccountBalance
+    Assert-Task ($balance.estimatedRemainingUSD -eq [decimal]$case[2]) 'Prepaid credit, pending charges or debt sign is wrong'
+  }
+  foreach ($badAccount in @([pscustomobject]@{},[pscustomobject]@{balance=$null;pending_charges=0},[pscustomobject]@{balance='invalid';pending_charges=0},[pscustomobject]@{balance=-10;pending_charges=-1})) {
+    $script:accountPayload=$badAccount; $rejected=$false
+    try { $null=Get-AccountBalance } catch { $rejected=$true }
+    Assert-Task $rejected 'Incomplete or invalid account balance treated as zero'
+  }
+  Microsoft.PowerShell.Utility\Write-Host 'PASS: estimated credit subtracts pending charges, preserves debt and rejects incomplete amounts'
+
+  $script:accountPayload=[pscustomobject]@{balance=-25;pending_charges=[decimal]'1.25';name='private-name-fixture';email='private@example.invalid'}
+  $script:lines.Clear(); Write-AccountStatus
+  $accountMarker=$script:lines | Where-Object {$_ -like '@@ACCOUNT_STATUS@@*'} | Select-Object -Last 1
+  Assert-Task ($accountMarker -and $accountMarker -notmatch 'private-name-fixture|private@example.invalid') 'Account output leaks personal fields'
+  $lblBalance=[pscustomobject]@{Text='';ForeColor=''}
+  $lblBalanceDetail=[pscustomobject]@{Text=''}
+  $lblBalanceUpdated=[pscustomobject]@{Text=''}
+  Update-AccountCard $accountMarker
+  Assert-Task ($lblBalance.Text -eq 'US$ 23.75' -and $lblBalanceDetail.Text -like '*25.00*1.25*' -and $lblBalanceUpdated.Text -like '*更新于*') 'Account card does not show remaining credit, pending usage and update time'
+  $script:mode='present'; $script:accountFailure=$true; $script:lines.Clear()
+  Write-RefreshStatus *> $null
+  Assert-Task (@($script:lines | Where-Object {$_ -like '@@NODE_STATUS@@*'}).Count -eq 1) 'Account failure hid successful node status'
+  Update-AccountCard ($script:lines -join "`n")
+  Assert-Task ($lblBalance.Text -eq '—' -and $lblBalanceDetail.Text -like '*查询失败*') 'Account failure shows stale balance or zero'
+  $script:accountFailure=$false; $script:mode='error'; $script:lines.Clear(); $failed=$false
+  try { Write-RefreshStatus *> $null } catch {$failed=$true}
+  Assert-Task ($failed -and @($script:lines | Where-Object {$_ -like '@@ACCOUNT_STATUS@@*'}).Count -eq 1) 'Node query failure blocked independent account refresh'
+  Microsoft.PowerShell.Utility\Write-Host 'PASS: account card refreshes independently, clears stale balances and excludes personal account fields'
 } finally {
   [Net.WebRequest]::DefaultWebProxy=$originalProxy
   [Net.ServicePointManager]::SecurityProtocol=$originalTls

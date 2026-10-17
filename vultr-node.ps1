@@ -37,8 +37,8 @@ function Invoke-ManagementRequest {
 }
 
 function Invoke-Api {
-  param([string]$Path, [string]$Method = 'Get', $Body = $null)
-  $apiArgs = @{ Uri = "$Base$Path"; Method = $Method; Headers = $Headers; TimeoutSec = 60 }
+  param([string]$Path, [string]$Method = 'Get', $Body = $null, [int]$TimeoutSec = 60)
+  $apiArgs = @{ Uri = "$Base$Path"; Method = $Method; Headers = $Headers; TimeoutSec = $TimeoutSec }
   if ($null -ne $Body) { $apiArgs.ContentType = 'application/json'; $apiArgs.Body = ($Body | ConvertTo-Json -Depth 8) }
   try { Invoke-ManagementRequest $apiArgs }
   catch { throw "Vultr API 直连请求失败：$($_.Exception.Message) 请检查本机直连网络、TLS 和 API 来源 IP 限制；未确认云端操作结果。" }
@@ -153,6 +153,43 @@ function Write-Status {
   if ($MachineStatus) { Write-Host ('@@NODE_STATUS@@' + ($result | ConvertTo-Json -Compress)) }
 }
 
+function Get-AccountBalance {
+  $account = (Invoke-Api '/account' -TimeoutSec 15).account
+  $amounts = @{}
+  foreach ($field in @('balance', 'pending_charges')) {
+    $number = [decimal]0
+    $text = [Convert]::ToString($account.$field, [Globalization.CultureInfo]::InvariantCulture)
+    if ([string]::IsNullOrWhiteSpace($text) -or -not [decimal]::TryParse($text, [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$number)) {
+      throw '账户余额响应缺少有效金额。'
+    }
+    $amounts[$field] = $number
+  }
+  if ($amounts.pending_charges -lt 0) { throw '账户待结算费用异常。' }
+  # Vultr's signed ledger: a negative balance is prepaid credit.
+  # Pending charges have not yet been settled against that credit.
+  [pscustomobject]@{ creditUSD=(-$amounts.balance); pendingChargesUSD=$amounts.pending_charges;
+    estimatedRemainingUSD=(-$amounts.balance - $amounts.pending_charges) }
+}
+
+function Write-AccountStatus {
+  $result = [ordered]@{ available=$false; creditUSD=$null; pendingChargesUSD=$null;
+    estimatedRemainingUSD=$null; checkedAtUtc=[DateTimeOffset]::UtcNow.ToString('o') }
+  try {
+    $account = Get-AccountBalance
+    $result.available=$true; $result.creditUSD=$account.creditUSD
+    $result.pendingChargesUSD=$account.pendingChargesUSD; $result.estimatedRemainingUSD=$account.estimatedRemainingUSD
+    Write-Host ('账户预计剩余（USD）: ' + $account.estimatedRemainingUSD.ToString('0.00', [Globalization.CultureInfo]::InvariantCulture))
+    Write-Host ('账户预存: ' + $account.creditUSD.ToString('0.00', [Globalization.CultureInfo]::InvariantCulture) + '；待结算: ' + $account.pendingChargesUSD.ToString('0.00', [Globalization.CultureInfo]::InvariantCulture))
+  } catch { Write-Host ('账户余额查询失败：' + $_.Exception.Message) -ForegroundColor Yellow }
+  if ($MachineStatus) { Write-Host ('@@ACCOUNT_STATUS@@' + ($result | ConvertTo-Json -Compress)) }
+}
+
+function Write-RefreshStatus {
+  # Account permission/network failure must not hide a confirmed node state,
+  # and a failed node query must still allow an independent account result.
+  try { Write-Status } finally { Write-AccountStatus }
+}
+
 function Start-Node {
   $existing = @(Get-Node)
   if ($existing.Count -gt 0) {
@@ -216,7 +253,7 @@ try {
     if (-not $locked) { throw '此节点已有开关操作在进行，请等待完成。' }
   }
   switch ($Action) {
-    'status' { Write-Status }
+    'status' { Write-RefreshStatus }
     'start'  { Start-Node }
     'stop'   { Stop-Node }
   }
