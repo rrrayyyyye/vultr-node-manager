@@ -71,21 +71,11 @@ jobs:
         with:
           api-level: 35
           arch: x86_64
-          target: default
-          profile: pixel_6
+          target: google_apis
+          profile: pixel_2
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
           disable-animations: true
-          script: |
-            mkdir -p artifacts/screenshots
-            adb shell am force-stop com.android.launcher3
-            adb shell input keyevent KEYCODE_WAKEUP
-            adb shell wm dismiss-keyguard
-            adb install test-build/android/app/build/outputs/apk/debug/app-debug.apk
-            adb install test-build/android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
-            adb shell am instrument -w org.raye.vultrmanager.test/org.raye.vultrmanager.SmokeRunner | tee artifacts/instrumentation.txt
-            grep -q 'smoke checks passed' artifacts/instrumentation.txt
-            adb pull /sdcard/Android/data/org.raye.vultrmanager/files/. artifacts/screenshots/
-            if [ -f test-build/artifacts/vultr-node-manager.apk ]; then adb uninstall org.raye.vultrmanager; adb install test-build/artifacts/vultr-node-manager.apk; adb shell am start -W -n org.raye.vultrmanager/.MainActivity; sleep 2; adb shell uiautomator dump /sdcard/release-ui.xml; adb pull /sdcard/release-ui.xml artifacts/; grep -q '接入已有云端节点' artifacts/release-ui.xml; fi
+          script: bash android/ci-device-check.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
