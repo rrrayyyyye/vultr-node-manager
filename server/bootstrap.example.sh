@@ -11,14 +11,33 @@ IP_VERSION="ipv4"
 # This optional public service is documented at https://nat64.net/.
 DNS_SETTINGS=""
 if [ "$IP_VERSION" = "ipv6" ]; then
+  # Debian minimal images do not necessarily include resolved, curl or UFW.
+  # Seed DNS first so apt itself can work over an IPv6-only connection.
+  if ! command -v resolvectl >/dev/null 2>&1; then
+    if [ ! -e /etc/resolv.conf.node-original ]; then
+      cp -L /etc/resolv.conf /etc/resolv.conf.node-original
+    fi
+    printf 'nameserver 2a01:4f9:c010:3f02::1\nnameserver 2a00:1098:2b::1\n' > /etc/resolv.conf
+    chmod 644 /etc/resolv.conf
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get -o Acquire::ForceIPv6=true -o Acquire::Retries=3 update
+    apt-get -o Acquire::ForceIPv6=true -o Acquire::Retries=3 install -y --no-install-recommends systemd-resolved curl ca-certificates
+  fi
   mkdir -p /etc/systemd/resolved.conf.d
   cat > /etc/systemd/resolved.conf.d/90-node-dns64.conf <<'DNSEOF'
 [Resolve]
 DNS=2a01:4f9:c010:3f02::1 2a00:1098:2b::1 2a01:4f8:c2c:123f::1
 Domains=~.
 DNSEOF
+  systemctl enable --now systemd-resolved
   systemctl restart systemd-resolved
   DNS_SETTINGS='"dns":{"servers":[{"type":"udp","tag":"dns64","server":"2a01:4f9:c010:3f02::1"}],"strategy":"ipv6_only"},"route":{"default_domain_resolver":{"server":"dns64","strategy":"ipv6_only"}},'
+fi
+
+if ! command -v curl >/dev/null 2>&1 || [ ! -s /etc/ssl/certs/ca-certificates.crt ]; then
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get -o Acquire::Retries=3 update
+  apt-get -o Acquire::Retries=3 install -y --no-install-recommends curl ca-certificates
 fi
 
 # ---------- 0. 上报动态域名（DuckDNS）----------
@@ -30,7 +49,7 @@ DNS_OK=false
 for i in $(seq 1 30); do
   if [ "$IP_VERSION" = "ipv6" ]; then
     # Use the address actually chosen by the default IPv6 route.
-    NODE_IPV6=$(ip -6 route get 2606:4700:4700::1111 | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n1)
+    NODE_IPV6=$(ip -6 route get 2606:4700:4700::1111 | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n1 || true)
     if [ -z "$NODE_IPV6" ]; then sleep 5; continue; fi
     RES=$(curl -6 -fsS --max-time 15 --get 'https://www.duckdns.org/update' --data-urlencode "domains=${DUCKDNS_DOMAIN}" --data-urlencode "token=${DUCKDNS_TOKEN}" --data-urlencode "ipv6=${NODE_IPV6}" || true)
   else
@@ -108,7 +127,9 @@ systemctl daemon-reload
 systemctl enable sing-box --now
 
 # ---------- 4. 防火墙放行 443（上次就是漏了这一步）----------
-ufw allow 443/tcp
-ufw allow 443/udp
+if command -v ufw >/dev/null 2>&1; then
+  ufw allow 443/tcp
+  ufw allow 443/udp
+fi
 
 echo "sing-box bootstrap done"

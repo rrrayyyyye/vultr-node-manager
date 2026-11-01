@@ -41,7 +41,7 @@
       "startupScriptId": "YOUR_VULTR_STARTUP_SCRIPT_ID",
       "plan": "vc2-1c-0.5gb-v6",
       "ipVersion": "ipv6",
-      "osId": 2284,
+      "osId": 2136,
       "uuid": "YOUR_VLESS_UUID",
       "publicKey": "YOUR_REALITY_PUBLIC_KEY",
       "shortId": "YOUR_REALITY_SHORT_ID",

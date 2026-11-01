@@ -91,6 +91,8 @@ git config --local http.https://github.com/.proxy http://127.0.0.1:7890
 
 模板包含 `atlanta-v6`：亚特兰大 `atl`、`vc2-1c-0.5gb-v6` 套餐、`ipVersion: ipv6`。是否有库存及实际价格以创建时 Vultr 返回为准。新泽西可使用另一份独立节点配置，将地区设为 `ewr`，同时使用不同的 id、标签、域名和开机脚本。现有配置省略 `ipVersion` 时仍按 IPv4 工作，无需为升级改写旧节点。
 
+512MB 节点使用 Debian 12 x64（`osId: 2136`）。Vultr 的 Ubuntu 24.04 镜像要求至少 1000MB 内存，不能沿用东京、洛杉矶的 `osId: 2284`；遇到该 API 拒绝时，只修改目标小内存节点的系统设置和开机脚本。模板会在 Debian 缺少 DNS 服务时先设置 IPv6 DNS，再安装 `systemd-resolved`、curl 和证书；仅在 UFW 已安装时执行放行规则。
+
 纯 IPv6 服务端须把开机模板中的 `IP_VERSION="ipv4"` 改为 `IP_VERSION="ipv6"`，并先在 DuckDNS 网页添加独立子域名。启动脚本自动取得云服务器的 IPv6 地址，只更新该域名的 AAAA 记录；不要填入管理电脑的校园网 IPv6。新域名若有默认的 A 记录，应在首次使用前清除，避免其他客户端连接错误地址。DNS Token 只能更新已有域名，不能代替网页注册子域名。
 
 IPv6 模式通过 [nat64.net](https://nat64.net/) 提供的公共 DNS64/NAT64 访问 GitHub 等仅 IPv4 下载站，服务端域名连接优先使用 IPv6；此服务的可用性会影响安装和仅 IPv4 网站的访问，不保证所有网站兼容，尤其是目标直接提供 IPv4 字面地址时。下载的 sing-box 1.14.2 Linux amd64 安装包校验固定 SHA-256，升级版本时必须同步更新校验值。IPv4 模式不启用这项服务。

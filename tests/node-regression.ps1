@@ -82,6 +82,7 @@ $script:paging=$false; $script:instances=@($tokyo,$lax); $script:calls.Clear()
 Start-Node *> $null
 $posts=@($script:calls | Where-Object Method -eq 'Post')
 Assert-Task ($posts.Count -eq 1 -and $posts[0].Body.region -eq 'atl' -and $posts[0].Body.plan -eq 'vc2-1c-0.5gb-v6' -and $posts[0].Body.enable_ipv6) 'IPv6 create parameters wrong'
+Assert-Task ($posts[0].Body.os_id -eq 2136) '512MB node must use the Debian 12 image, not the Ubuntu 24.04 image requiring 1000MB'
 Assert-Task ((Get-NodeIp $atl) -eq '2001:db8::1' -and (Test-SameIp $atl.v6_main_ip $script:dnsReply)) 'IPv6 normalization or equality failed'
 $script:instances=@($tokyo,$lax,$atl); $script:calls.Clear()
 Stop-Node *> $null
