@@ -35,7 +35,7 @@ final class Models {
                 field(n,"uuid"),field(n,"publicKey"),field(n,"shortId"),field(n,"sni"),n.optString("ipVersion",n.getString("plan").endsWith("-v6")?"ipv6":"ipv4"));
             if(!List.of("ipv4","ipv6").contains(node.ipVersion) || (node.plan.endsWith("-v6")&&!node.ipVersion.equals("ipv6"))) throw new Exception("无效 IP 版本配置");
             if (!node.id.matches("[a-zA-Z0-9_-]{1,80}") || !node.region.matches("[a-z0-9-]{1,20}") ||
-                !node.script.matches("[a-zA-Z0-9-]{1,80}") || !node.plan.matches("[a-zA-Z0-9-]{1,80}") ||
+                !node.script.matches("[a-zA-Z0-9-]{1,80}") || !node.plan.matches("[a-zA-Z0-9.-]{1,80}") ||
                 !host(node.domain) || !host(node.sni) || node.osId<=0 ||
                 !node.uuid.matches("[a-fA-F0-9]{8}(-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}") ||
                 !node.publicKey.matches("[a-zA-Z0-9_-]{43}") || !node.shortId.matches("([a-fA-F0-9]{2}){1,8}"))
