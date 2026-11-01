@@ -23,12 +23,13 @@ if [ "$IP_VERSION" = "ipv6" ]; then
     apt-get -o Acquire::ForceIPv6=true -o Acquire::Retries=3 update
     apt-get -o Acquire::ForceIPv6=true -o Acquire::Retries=3 install -y --no-install-recommends systemd-resolved curl ca-certificates
   fi
-  mkdir -p /etc/systemd/resolved.conf.d
+  install -d -m755 /etc/systemd/resolved.conf.d
   cat > /etc/systemd/resolved.conf.d/90-node-dns64.conf <<'DNSEOF'
 [Resolve]
 DNS=2a01:4f9:c010:3f02::1 2a00:1098:2b::1 2a01:4f8:c2c:123f::1
 Domains=~.
 DNSEOF
+  chmod 644 /etc/systemd/resolved.conf.d/90-node-dns64.conf
   systemctl enable --now systemd-resolved
   systemctl restart systemd-resolved
   DNS_SETTINGS='"dns":{"servers":[{"type":"udp","tag":"dns64","server":"2a01:4f9:c010:3f02::1"}],"strategy":"ipv6_only"},"route":{"default_domain_resolver":{"server":"dns64","strategy":"ipv6_only"}},'
