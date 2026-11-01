@@ -8,8 +8,16 @@ import java.util.*;
 
 final class Models {
     record Node(String id, String name, String linkName, String region, String label, String domain,
-                String script, String plan, int osId, String uuid, String publicKey, String shortId, String sni) {}
-    record Instance(String id, String region, String label, String status, String power, String ip, Instant created) {}
+                String script, String plan, int osId, String uuid, String publicKey, String shortId, String sni, String ipVersion) {
+        Node(String id,String name,String linkName,String region,String label,String domain,String script,String plan,int osId,String uuid,String publicKey,String shortId,String sni) {
+            this(id,name,linkName,region,label,domain,script,plan,osId,uuid,publicKey,shortId,sni,plan.endsWith("-v6")?"ipv6":"ipv4");
+        }
+        boolean ipv6() { return ipVersion.equals("ipv6") || plan.endsWith("-v6"); }
+    }
+    record Instance(String id, String region, String label, String status, String power, String ip, Instant created, String ipv6) {
+        Instance(String id,String region,String label,String status,String power,String ip,Instant created) {this(id,region,label,status,power,ip,created,"");}
+    }
+    static Instance forNode(Instance i,Node n) { return n.ipv6()?new Instance(i.id,i.region,i.label,i.status,i.power,i.ipv6,i.created,i.ipv6):i; }
     record Balance(BigDecimal credit, BigDecimal pending, BigDecimal remaining, Instant checked) {}
     record Pending(String instanceId, boolean accepted) {}
 
@@ -24,7 +32,8 @@ final class Models {
             JSONObject n = rows.getJSONObject(i);
             Node node = new Node(field(n,"id"),field(n,"name"),field(n,"linkName"),field(n,"region"),
                 field(n,"label"),field(n,"domain"),field(n,"startupScriptId"),field(n,"plan"),n.getInt("osId"),
-                field(n,"uuid"),field(n,"publicKey"),field(n,"shortId"),field(n,"sni"));
+                field(n,"uuid"),field(n,"publicKey"),field(n,"shortId"),field(n,"sni"),n.optString("ipVersion",n.getString("plan").endsWith("-v6")?"ipv6":"ipv4"));
+            if(!List.of("ipv4","ipv6").contains(node.ipVersion) || (node.plan.endsWith("-v6")&&!node.ipVersion.equals("ipv6"))) throw new Exception("无效 IP 版本配置");
             if (!node.id.matches("[a-zA-Z0-9_-]{1,80}") || !node.region.matches("[a-z0-9-]{1,20}") ||
                 !node.script.matches("[a-zA-Z0-9-]{1,80}") || !node.plan.matches("[a-zA-Z0-9-]{1,80}") ||
                 !host(node.domain) || !host(node.sni) || node.osId<=0 ||
@@ -53,7 +62,7 @@ final class Models {
         try { created=Instant.parse(j.optString("date_created").replace(" ","T").replaceAll("(?<!Z)$","Z")); } catch (Exception ignored) { }
         // Some API dates already include an explicit UTC offset.
         if (created==null) try { created=OffsetDateTime.parse(j.optString("date_created").replace(" ","T")).toInstant(); } catch (Exception ignored) { }
-        return new Instance(field(j,"id"),field(j,"region"),j.optString("label",""),field(j,"status"),j.optString("power_status","未知"),j.optString("main_ip",""),created);
+        return new Instance(field(j,"id"),field(j,"region"),j.optString("label",""),field(j,"status"),j.optString("power_status","未知"),j.optString("main_ip",""),created,j.optString("v6_main_ip",""));
     }
     static Instance find(List<Instance> all, Node n) throws Exception {
         List<Instance> matching = new ArrayList<>();
@@ -62,7 +71,7 @@ final class Models {
         if (matching.isEmpty()) return null;
         Instance i=matching.get(0);
         if (!i.region.equals(n.region)) throw new Exception("标签出现在其他地区，已阻止开关操作");
-        return i;
+        return forNode(i,n);
     }
     static Balance balance(JSONObject root) throws Exception {
         JSONObject a=root.getJSONObject("account");
@@ -80,8 +89,9 @@ final class Models {
     static String money(BigDecimal v) { return v.setScale(2,java.math.RoundingMode.HALF_UP).toPlainString(); }
     static String yamlQuote(String v) { return "'"+v.replace("'","''")+"'"; }
     static String exportYaml(List<Node> nodes) {
-        StringBuilder b=new StringBuilder("mixed-port: 7890\nallow-lan: false\nmode: rule\nlog-level: info\nipv6: false\ndns:\n  enable: true\n  enhanced-mode: fake-ip\n  fake-ip-range: 198.18.0.1/16\n  fake-ip-filter:\n    - api.vultr.com\n  nameserver:\n    - https://223.5.5.5/dns-query\n    - https://1.1.1.1/dns-query\n  proxy-server-nameserver:\n    - https://223.5.5.5/dns-query\n    - https://1.1.1.1/dns-query\nproxies:\n");
-        for (Node n:nodes) b.append("  - name: ").append(yamlQuote(n.linkName)).append("\n    type: vless\n    server: ").append(yamlQuote(n.domain)).append("\n    port: 443\n    uuid: ").append(yamlQuote(n.uuid)).append("\n    network: tcp\n    udp: true\n    tls: true\n    flow: xtls-rprx-vision\n    servername: ").append(yamlQuote(n.sni)).append("\n    client-fingerprint: chrome\n    reality-opts:\n      public-key: ").append(yamlQuote(n.publicKey)).append("\n      short-id: ").append(yamlQuote(n.shortId)).append('\n');
+        boolean ipv6=nodes.stream().anyMatch(Node::ipv6);
+        StringBuilder b=new StringBuilder("mixed-port: 7890\nallow-lan: false\nmode: rule\nlog-level: info\nipv6: "+ipv6+"\ndns:\n  enable: true\n  ipv6: "+ipv6+"\n  enhanced-mode: fake-ip\n  fake-ip-range: 198.18.0.1/16\n  fake-ip-filter:\n    - api.vultr.com\n  nameserver:\n    - https://223.5.5.5/dns-query\n    - https://1.1.1.1/dns-query\n  proxy-server-nameserver:\n    - https://223.5.5.5/dns-query\n    - https://1.1.1.1/dns-query\nproxies:\n");
+        for (Node n:nodes) b.append("  - name: ").append(yamlQuote(n.linkName)).append("\n    type: vless\n    server: ").append(yamlQuote(n.domain)).append("\n    ip-version: ").append(n.ipv6()?"ipv6":"ipv4").append("\n    port: 443\n    uuid: ").append(yamlQuote(n.uuid)).append("\n    network: tcp\n    udp: true\n    tls: true\n    flow: xtls-rprx-vision\n    servername: ").append(yamlQuote(n.sni)).append("\n    client-fingerprint: chrome\n    reality-opts:\n      public-key: ").append(yamlQuote(n.publicKey)).append("\n      short-id: ").append(yamlQuote(n.shortId)).append('\n');
         b.append("proxy-groups:\n  - name: PROXY\n    type: select\n    proxies:\n");
         for(Node n:nodes) b.append("      - ").append(yamlQuote(n.linkName)).append('\n');
         return b.append("rules:\n  - DOMAIN,api.vultr.com,DIRECT\n  - IP-CIDR,223.5.5.5/32,DIRECT,no-resolve\n  - IP-CIDR,1.1.1.1/32,DIRECT,no-resolve\n  - GEOIP,CN,DIRECT\n  - MATCH,PROXY\n").toString();

@@ -42,3 +42,5 @@ Java 17，Android SDK 35，Gradle 8.9（wrapper 校验分发包 SHA-256），AGP
 GitHub Actions 在 Android 代码变更时构建、执行模拟 API 单元测试和 Android lint；在隔离 Android 35 模拟器上检查原生界面、导航、Keystore 往返读写，并输出模拟截图。模拟器使用虚构节点且不创建 API 客户端，不访问真实 Vultr 资源。
 
 主分支构建额外生成固定签名的 `vultr-node-manager.apk`。Secrets：`ANDROID_KEYSTORE_BASE64` 和 `ANDROID_STORE_PASSWORD`；alias 为 `vultr-manager`。外部分支 / PR 不使用签名 Secrets。下载通过的 `android-build` artifact，在所有检查通过后将 APK 和校验和附到 GitHub Release。签名材料、SDK 路径、APK 和构建缓存不提交 Git。
+
+1.1.0 新增 IPv6-only 节点支持：覆盖安装后重新导入更新的 nodes.json（原有 API key 无需更换）。导出新 YAML 后更新 FlClash，并开启其全局 IPv6；先保留可用出口再单独测速。手机主界面各节点卡片保持独立，不需要使用地区下拉框。

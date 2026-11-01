@@ -90,8 +90,8 @@ final class Cloud {
         found=Models.find(list(),node);
         if(found!=null) return found;
         JSONObject body=new JSONObject().put("region",node.region()).put("plan",node.plan()).put("os_id",node.osId())
-            .put("label",node.label()).put("hostname",node.label()).put("script_id",node.script()).put("backups","disabled").put("enable_ipv6",false);
-        Models.Instance created=Models.instance(api.request("POST","/instances",body,60000).getJSONObject("instance"));
+            .put("label",node.label()).put("hostname",node.label()).put("script_id",node.script()).put("backups","disabled").put("enable_ipv6",node.ipv6());
+        Models.Instance created=Models.forNode(Models.instance(api.request("POST","/instances",body,60000).getJSONObject("instance")),node);
         if(!created.region().equals(node.region())||!created.label().equals(node.label())) throw new Exception("创建回执身份异常，请刷新云端状态");
         return created;
     }
@@ -108,13 +108,18 @@ final class Cloud {
         if(instance.ip().isEmpty()||instance.ip().equals("0.0.0.0")) return "公网 IP 尚未分配";
         boolean dns=false,tcp=false;
         try {
-            JSONObject result=jsonRequest(new URL("https://223.5.5.5/resolve?name="+URLEncoder.encode(node.domain(),"UTF-8")+"&type=A"),"GET",null,null,4000);
+            JSONObject result=jsonRequest(new URL("https://223.5.5.5/resolve?name="+URLEncoder.encode(node.domain(),"UTF-8")+"&type="+(node.ipv6()?"AAAA":"A")),"GET",null,null,4000);
             JSONArray answers=result.optJSONArray("Answer");
-            if(answers!=null) for(int i=0;i<answers.length();i++) if(answers.getJSONObject(i).optInt("type")==1 && instance.ip().equals(answers.getJSONObject(i).optString("data"))) dns=true;
+            if(answers!=null) for(int i=0;i<answers.length();i++) if(answers.getJSONObject(i).optInt("type")== (node.ipv6()?28:1) && sameIp(instance.ip(),answers.getJSONObject(i).optString("data"))) dns=true;
         } catch(Exception ignored) { }
         // Require a literal IPv4 from Vultr rather than inadvertently resolving an arbitrary host.
-        if(instance.ip().matches("([0-9]{1,3}\\.){3}[0-9]{1,3}"))
+        if(literalIp(instance.ip()))
             try(Socket s=new Socket(Proxy.NO_PROXY)) { s.connect(new InetSocketAddress(instance.ip(),443),4000); tcp=true; } catch(Exception ignored) { }
         return "域名 "+(dns?"一致":"未确认")+" · TCP 443 "+(tcp?"可达":"未确认");
+    }
+    static boolean literalIp(String ip) { return ip.matches("([0-9]{1,3}\\.){3}[0-9]{1,3}") || (ip.contains(":")&&ip.matches("[0-9a-fA-F:]+")); }
+    static boolean sameIp(String a,String b) {
+        if(!literalIp(a)||!literalIp(b))return false;
+        try{return InetAddress.getByName(a).equals(InetAddress.getByName(b));}catch(Exception e){return false;}
     }
 }

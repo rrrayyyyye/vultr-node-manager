@@ -24,6 +24,15 @@ function Get-PendingDeletion {
   return $null
 }
 
+function Open-NodeWindow([string]$Id) {
+  $entries=@($NodeConfig.nodes | Where-Object { $_.id -eq $Id })
+  if ($entries.Count -ne 1) { throw '节点不存在或重复。' }
+  $gui=(Join-Path $Dir 'vultr-node-gui.ps1').Replace("'","''")
+  $safeId=$Id.Replace("'","''")
+  $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes("& '$gui' -Node '$safeId'"))
+  Start-Process powershell.exe -WindowStyle Hidden -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand',$encoded)
+}
+
 # ==================== 子进程调用 / 输出实时读取 ====================
 
 function Start-NodeAction {
@@ -145,7 +154,7 @@ $colFace  = [Drawing.Color]::FromArgb(246, 247, 249)
 $colBtnPl = [Drawing.Color]::FromArgb(232, 234, 238)
 
 $form = New-Object Windows.Forms.Form
-$form.Text = 'Vultr 多地区节点管理'
+$form.Text = 'Vultr 节点管理 · ' + $script:selectedNode.name
 $form.ClientSize = New-Object Drawing.Size(900, 786)
 $form.MinimumSize = New-Object Drawing.Size(880, 696)
 $form.StartPosition = 'CenterScreen'
@@ -221,20 +230,25 @@ $selectorBar = New-Object Windows.Forms.FlowLayoutPanel
 $selectorBar.Dock = 'Fill'
 $selectorBar.Padding = New-Object Windows.Forms.Padding(18, 9, 18, 4)
 $selectorLabel = New-Object Windows.Forms.Label
-$selectorLabel.Text = '选择地区'
+$selectorLabel.Text = '独立节点'
 $selectorLabel.AutoSize = $true
 $selectorLabel.Margin = New-Object Windows.Forms.Padding(0, 5, 12, 0)
-$nodeSelector = New-Object Windows.Forms.ComboBox
-$nodeSelector.DropDownStyle = 'DropDownList'
-$nodeSelector.DisplayMember = 'name'
-$nodeSelector.Width = 210
-foreach ($entry in $NodeConfig.nodes) { [void]$nodeSelector.Items.Add($entry) }
-$nodeSelector.SelectedItem = $script:selectedNode
+$nodeSelector = New-Object Windows.Forms.Control
+[void]$selectorBar.Controls.Add($selectorLabel)
+foreach ($entry in $NodeConfig.nodes) {
+  $nodeButton=New-Object Windows.Forms.Button
+  $nodeButton.Text=$entry.name
+  $nodeButton.AutoSize=$true
+  $nodeButton.Tag=$entry.id
+  $nodeButton.Enabled=($entry.id -ne $script:selectedNode.id)
+  $nodeButton.Add_Click({ Open-NodeWindow ([string]$this.Tag) })
+  [void]$selectorBar.Controls.Add($nodeButton)
+}
 $planLabel = New-Object Windows.Forms.Label
 $planLabel.AutoSize = $true
 $planLabel.Margin = New-Object Windows.Forms.Padding(16, 5, 0, 0)
 $planLabel.Text = "$($script:selectedNode.region) · $($script:selectedNode.plan)"
-$selectorBar.Controls.AddRange(@($selectorLabel, $nodeSelector, $planLabel))
+[void]$selectorBar.Controls.Add($planLabel)
 [void]$root.Controls.Add($selectorBar, 0, 2)
 
 # ---- 实例连接详情 ----
@@ -569,14 +583,6 @@ $deletionTimer.Add_Tick({
 $btnStart.Add_Click({ Invoke-Action 'start' })
 $btnRefresh.Add_Click({ $pending=Get-PendingDeletion; if ($null -ne $pending) { $pending.attempts=0 }; Invoke-Action 'status' })
 $btnExport.Add_Click({ Invoke-Action 'export' })
-$nodeSelector.Add_SelectedIndexChanged({
-  if ($script:busy -or -not $nodeSelector.SelectedItem) { return }
-  $script:selectedNode = $nodeSelector.SelectedItem
-  $planLabel.Text = "$($script:selectedNode.region) · $($script:selectedNode.plan)"
-  $lblId.Text='—'; $lblIp.Text='—'; $lblDns.Text='—'; $lblPort.Text='—'
-  $lblCreated.Text='—'; $lblAge.Text='—'; $script:createdAtUtc=$null
-  Invoke-Action 'status'
-})
 $btnClear.Add_Click({
   $log.Clear()
   [void]$script:buf.Clear()
