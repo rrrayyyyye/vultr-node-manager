@@ -227,7 +227,7 @@ try {
   Assert-Task ($banner.Text -like '*已受理*' -and $banner.Text -notlike '*查询失败*' -and $banner.Text -notlike '*已销毁*') 'Transient confirmation failure erased progress or falsely confirmed deletion'
   Update-Card ('@@NODE_STATUS@@'+($present | ConvertTo-Json -Compress))
   Assert-Task ($banner.Text -like '*正在销毁*' -and $lblAge.Text -eq '—') 'Provider still listing the old instance was shown as running'
-  foreach ($controlName in @('btnStart','btnStop','btnRefresh','btnClear','btnExport','nodeSelector','progress')) {
+  foreach ($controlName in @('btnStart','btnStop','btnRefresh','btnClear','btnExport','progress')) {
     Set-Variable -Name $controlName -Value ([pscustomobject]@{Enabled=$false;Visible=$false}) -Scope Script
   }
   Set-Busy $false
@@ -269,15 +269,6 @@ try {
     Assert-Task ($exported.Contains('DOMAIN,api.vultr.com,DIRECT') -and $exported.IndexOf('DOMAIN,api.vultr.com,DIRECT') -lt $exported.IndexOf('MATCH,PROXY') -and $exported.Contains('IP-CIDR,223.5.5.5/32,DIRECT,no-resolve')) 'Exported profile can send management requests through the managed node'
   } finally {Remove-Item -LiteralPath $OutputPath -ErrorAction SilentlyContinue}
   Microsoft.PowerShell.Utility\Write-Host 'PASS: exported profiles route management API and DNS directly before proxy fallback'
-  # Region navigation opens an independent GUI even during a slow refresh.
-  $NodeConfig=$Config; $Dir=$root; $script:busy=$true
-  function Start-Process { param([Parameter(Position=0)]$FilePath,$WindowStyle,$ArgumentList)
-    $script:openedWindow=@{file=$FilePath;style=$WindowStyle;args=$ArgumentList}
-  }
-  $beforeNode=$script:selectedNode.id
-  Open-NodeWindow 'atlanta-v6'
-  Assert-Task ($script:openedWindow.file -eq 'wscript.exe' -and $script:openedWindow.args[-1] -eq 'atlanta-v6' -and $script:selectedNode.id -eq $beforeNode -and $script:openedWindow.style -eq 'Hidden') 'Independent navigation was blocked by refresh or changed the active node'
-  Microsoft.PowerShell.Utility\Write-Host 'PASS: region buttons open independent windows while another node is refreshing'
 } finally {
   [Net.WebRequest]::DefaultWebProxy=$originalProxy
   [Net.ServicePointManager]::SecurityProtocol=$originalTls

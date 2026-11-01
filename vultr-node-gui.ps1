@@ -4,7 +4,7 @@
   双击 节点管理.vbs 启动；-SelfTest -Node los-angeles 只读检查子进程链路。
 #>
 [CmdletBinding()]
-param([switch]$SelfTest, [string]$Node = 'tokyo')
+param([switch]$SelfTest, [string]$Node = 'tokyo', [switch]$Panel)
 
 $ErrorActionPreference = 'Stop'
 
@@ -22,14 +22,6 @@ function Get-PendingDeletion {
     return $script:pendingDeletes[[string]$script:selectedNode.id]
   }
   return $null
-}
-
-function Open-NodeWindow([string]$Id) {
-  $entries=@($NodeConfig.nodes | Where-Object { $_.id -eq $Id })
-  if ($entries.Count -ne 1) { throw '节点不存在或重复。' }
-  if ($Id -notmatch '^[a-z0-9-]+$') { throw '节点 ID 格式无效。' }
-  $launcher=Join-Path $Dir '节点管理.vbs'
-  Start-Process wscript.exe -WindowStyle Hidden -ArgumentList @(('"'+$launcher+'"'),$Id)
 }
 
 # ==================== 子进程调用 / 输出实时读取 ====================
@@ -144,6 +136,72 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
+function Show-NodeDashboard {
+  # Each card runs in its own module scope on the same UI thread. Event handlers,
+  # timers and child-process state stay bound to that card, without extra windows.
+  $dashboard = New-Object Windows.Forms.Form
+  $dashboard.Text = 'Vultr 节点管理'
+  $area = [Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+  $dashboard.ClientSize = New-Object Drawing.Size([Math]::Min(1280, $area.Width-60), [Math]::Min(820, $area.Height-70))
+  $dashboard.MinimumSize = New-Object Drawing.Size(900, 650)
+  $dashboard.StartPosition = 'CenterScreen'
+  $dashboard.Font = New-Object Drawing.Font('Microsoft YaHei UI', 9)
+  $dashboard.BackColor = [Drawing.Color]::FromArgb(246,247,249)
+  $layout = New-Object Windows.Forms.TableLayoutPanel
+  $layout.Dock='Fill'; $layout.ColumnCount=1; $layout.RowCount=2
+  [void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute',58)))
+  [void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Percent',100)))
+  $dashboard.Controls.Add($layout)
+  $heading = New-Object Windows.Forms.Label
+  $heading.Dock='Fill'; $heading.Padding=New-Object Windows.Forms.Padding(16,0,0,0)
+  $heading.TextAlign='MiddleLeft'; $heading.Font=New-Object Drawing.Font('Microsoft YaHei UI',12)
+  $heading.Text='全部节点  ·  状态、操作和日志各自独立'
+  [void]$layout.Controls.Add($heading,0,0)
+  $scroll = New-Object Windows.Forms.Panel
+  $scroll.Dock='Fill'; $scroll.AutoScroll=$true
+  [void]$layout.Controls.Add($scroll,0,1)
+  $cards = New-Object Windows.Forms.TableLayoutPanel
+  $cards.ColumnCount=@($NodeConfig.nodes).Count; $cards.RowCount=1
+  $cards.MinimumSize=New-Object Drawing.Size((360*$cards.ColumnCount),560)
+  $cards.Size=$cards.MinimumSize
+  $scroll.AutoScrollMinSize=$cards.MinimumSize
+  $scroll.Controls.Add($cards)
+  $resizeCards = {
+    $cards.Size=New-Object Drawing.Size([Math]::Max($cards.MinimumSize.Width,$scroll.ClientSize.Width),[Math]::Max($cards.MinimumSize.Height,$scroll.ClientSize.Height))
+  }
+  $scroll.Add_ClientSizeChanged({ & $resizeCards })
+  $modules = @()
+  try {
+    foreach ($entry in $NodeConfig.nodes) {
+      if (@($NodeConfig.nodes | Where-Object {$_.id -eq $entry.id}).Count -ne 1) { throw '节点 ID 重复。' }
+      $module = New-Module -Name ('NodeCard-'+[guid]::NewGuid().ToString('N')) -ArgumentList $PSCommandPath,$entry.id -ScriptBlock {
+        param($PanelPath,$NodeId)
+        . $PanelPath -Panel -Node $NodeId
+        Export-ModuleMember -Function Get-NodePanel,Initialize-NodePanel,Close-NodePanel,Get-NodeBusy
+      }
+      $modules += $module
+      [void]$cards.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle('Percent',(100.0/$cards.ColumnCount))))
+      $card = & $module { Get-NodePanel }
+      [void]$cards.Controls.Add($card,($modules.Count-1),0)
+    }
+    $dashboard.Add_Shown({ & $resizeCards; foreach ($module in $modules) { & $module { Initialize-NodePanel } } })
+    $dashboard.Add_FormClosing({
+      param($sender,$eventArgs)
+      $working=@($modules | Where-Object { & $_ { Get-NodeBusy } })
+      if ($working.Count) {
+        $answer=[Windows.Forms.MessageBox]::Show($dashboard,'当前还有操作在进行中。关闭窗口不会取消已提交的云端操作，确定要关闭吗？','确认关闭','YesNo','Question')
+        if ($answer -ne [Windows.Forms.DialogResult]::Yes) { $eventArgs.Cancel=$true }
+      }
+    })
+    [void]$dashboard.ShowDialog()
+  } finally {
+    foreach ($module in $modules) { & $module { Close-NodePanel }; Remove-Module $module -ErrorAction SilentlyContinue }
+    $dashboard.Dispose()
+  }
+}
+
+if (-not $Panel) { Show-NodeDashboard; return }
+
 $colOk    = [Drawing.Color]::FromArgb(38, 160, 90)
 $colOff   = [Drawing.Color]::FromArgb(120, 124, 132)
 $colWarn  = [Drawing.Color]::FromArgb(200, 145, 20)
@@ -152,11 +210,10 @@ $colInk   = [Drawing.Color]::FromArgb(32, 34, 38)
 $colFace  = [Drawing.Color]::FromArgb(246, 247, 249)
 $colBtnPl = [Drawing.Color]::FromArgb(232, 234, 238)
 
-$form = New-Object Windows.Forms.Form
-$form.Text = 'Vultr 节点管理 · ' + $script:selectedNode.name
-$form.ClientSize = New-Object Drawing.Size(900, 786)
-$form.MinimumSize = New-Object Drawing.Size(880, 696)
-$form.StartPosition = 'CenterScreen'
+$form = New-Object Windows.Forms.UserControl
+$form.Name = [string]$script:selectedNode.id
+$form.Dock = 'Fill'
+$form.Margin = New-Object Windows.Forms.Padding(6,0,6,8)
 $form.Font = New-Object Drawing.Font('Microsoft YaHei UI', 9)
 $form.BackColor = $colFace
 
@@ -165,13 +222,13 @@ $root.Dock = 'Fill'
 $root.ColumnCount = 1
 $root.RowCount = 7
 [void]$root.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Percent, 100)))
-[void]$root.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Absolute, 74)))
-[void]$root.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Absolute, 136)))
-[void]$root.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Absolute, 48)))
-[void]$root.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Absolute, 104)))
-[void]$root.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Absolute, 58)))
+[void]$root.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Absolute, 70)))
+[void]$root.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Absolute, 114)))
+[void]$root.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Absolute, 36)))
+[void]$root.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Absolute, 144)))
+[void]$root.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Absolute, 86)))
 [void]$root.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Percent, 100)))
-[void]$root.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Absolute, 26)))
+[void]$root.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Absolute, 36)))
 $form.Controls.Add($root)
 
 # ---- 顶部状态横幅 ----
@@ -180,7 +237,8 @@ $banner.Dock = 'Fill'
 $banner.Margin = New-Object Windows.Forms.Padding(0)
 $banner.Text = '…  正在读取状态'
 $banner.TextAlign = 'MiddleCenter'
-$banner.Font = New-Object Drawing.Font('Microsoft YaHei UI', 18, [Drawing.FontStyle]::Bold)
+$banner.Font = New-Object Drawing.Font('Microsoft YaHei UI', 11, [Drawing.FontStyle]::Bold)
+$banner.Padding = New-Object Windows.Forms.Padding(8)
 $banner.ForeColor = [Drawing.Color]::White
 $banner.BackColor = $colOff
 [void]$root.Controls.Add($banner, 0, 0)
@@ -189,18 +247,18 @@ $banner.BackColor = $colOff
 $metrics = New-Object Windows.Forms.TableLayoutPanel
 $metrics.Dock = 'Fill'
 $metrics.ColumnCount = 2; $metrics.RowCount = 1
-$metrics.Padding = New-Object Windows.Forms.Padding(18, 10, 18, 0)
-[void]$metrics.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Percent, 58)))
-[void]$metrics.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Percent, 42)))
+$metrics.Padding = New-Object Windows.Forms.Padding(8, 6, 0, 0)
+[void]$metrics.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Percent, 52)))
+[void]$metrics.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Percent, 48)))
 [void]$root.Controls.Add($metrics, 0, 1)
 
 function New-MetricCard([string]$Title, [int]$Column, $Accent) {
   $card = New-Object Windows.Forms.TableLayoutPanel
   $card.Dock='Fill'; $card.ColumnCount=1; $card.RowCount=4
-  $card.Padding=New-Object Windows.Forms.Padding(12, 4, 12, 4)
+  $card.Padding=New-Object Windows.Forms.Padding(6, 2, 6, 2)
   $card.Margin=New-Object Windows.Forms.Padding(0, 0, 8, 0)
   $card.BackColor=[Drawing.Color]::White
-  foreach ($height in @(22, 44, 24, 22)) { [void]$card.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Absolute, $height))) }
+  foreach ($height in @(20, 32, 22, 22)) { [void]$card.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Absolute, $height))) }
   $labels=@()
   for ($i=0; $i -lt 4; $i++) {
     $label=New-Object Windows.Forms.Label
@@ -208,7 +266,7 @@ function New-MetricCard([string]$Title, [int]$Column, $Accent) {
     $label.Margin=New-Object Windows.Forms.Padding(0)
     $label.ForeColor=$colInk
     if ($i -eq 0) { $label.Text=$Title }
-    elseif ($i -eq 1) { $label.Text='—'; $label.Font=New-Object Drawing.Font('Microsoft YaHei UI', 22, [Drawing.FontStyle]::Bold); $label.ForeColor=$Accent }
+    elseif ($i -eq 1) { $label.Text='—'; $label.Font=New-Object Drawing.Font('Microsoft YaHei UI', 12, [Drawing.FontStyle]::Bold); $label.ForeColor=$Accent }
     else { $label.Font=New-Object Drawing.Font('Microsoft YaHei UI', 8); $label.ForeColor=$colOff }
     [void]$card.Controls.Add($label, 0, $i)
     $labels+=$label
@@ -216,36 +274,21 @@ function New-MetricCard([string]$Title, [int]$Column, $Accent) {
   [void]$metrics.Controls.Add($card, $Column, 0)
   return ,$labels
 }
-$ageLabels=New-MetricCard '当前地区 · 已开时长' 0 $colBusy
+$ageLabels=New-MetricCard '已开时长' 0 $colBusy
 $lblAge=$ageLabels[1]; $lblCreated=$ageLabels[2]
 $ageLabels[3].Text='自云端创建起算；其他设备销毁后请刷新'
-$balanceLabels=New-MetricCard '账户预计剩余（USD）' 1 $colOk
+$balanceLabels=New-MetricCard '账户预计剩余' 1 $colOk
 $lblBalance=$balanceLabels[1]; $lblBalanceDetail=$balanceLabels[2]; $lblBalanceUpdated=$balanceLabels[3]
 $lblBalanceDetail.Text='正在查询账户余额'
 $script:createdAtUtc=$null
 
-# ---- 地区选择：所有动作仅针对当前选择 ----
+# ---- 每张卡片固定绑定自己的地区 ----
 $selectorBar = New-Object Windows.Forms.FlowLayoutPanel
 $selectorBar.Dock = 'Fill'
-$selectorBar.Padding = New-Object Windows.Forms.Padding(18, 9, 18, 4)
-$selectorLabel = New-Object Windows.Forms.Label
-$selectorLabel.Text = '独立节点'
-$selectorLabel.AutoSize = $true
-$selectorLabel.Margin = New-Object Windows.Forms.Padding(0, 5, 12, 0)
-$nodeSelector = New-Object Windows.Forms.Control
-[void]$selectorBar.Controls.Add($selectorLabel)
-foreach ($entry in $NodeConfig.nodes) {
-  $nodeButton=New-Object Windows.Forms.Button
-  $nodeButton.Text=$entry.name
-  $nodeButton.AutoSize=$true
-  $nodeButton.Tag=$entry.id
-  $nodeButton.Enabled=($entry.id -ne $script:selectedNode.id)
-  $nodeButton.Add_Click({ Open-NodeWindow ([string]$this.Tag) })
-  [void]$selectorBar.Controls.Add($nodeButton)
-}
+$selectorBar.Padding = New-Object Windows.Forms.Padding(8, 5, 8, 4)
 $planLabel = New-Object Windows.Forms.Label
 $planLabel.AutoSize = $true
-$planLabel.Margin = New-Object Windows.Forms.Padding(16, 5, 0, 0)
+$planLabel.Margin = New-Object Windows.Forms.Padding(0, 5, 0, 0)
 $planLabel.Text = "$($script:selectedNode.region) · $($script:selectedNode.plan)"
 [void]$selectorBar.Controls.Add($planLabel)
 [void]$root.Controls.Add($selectorBar, 0, 2)
@@ -255,8 +298,8 @@ $details = New-Object Windows.Forms.TableLayoutPanel
 $details.Dock = 'Fill'
 $details.ColumnCount = 2
 $details.RowCount = 4
-$details.Padding = New-Object Windows.Forms.Padding(18, 6, 18, 6)
-[void]$details.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Absolute, 96)))
+$details.Padding = New-Object Windows.Forms.Padding(8, 2, 8, 2)
+[void]$details.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Absolute, 68)))
 [void]$details.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Percent, 100)))
 for ($i = 0; $i -lt $details.RowCount; $i++) { [void]$details.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Percent, (100.0 / $details.RowCount)))) }
 [void]$root.Controls.Add($details, 0, 3)
@@ -287,20 +330,20 @@ $lblPort = $detailValues['443 端口']
 # ---- 按钮条 ----
 $bar = New-Object Windows.Forms.FlowLayoutPanel
 $bar.Dock = 'Fill'
-$bar.WrapContents = $false
+$bar.WrapContents = $true
 $bar.BackColor = $colFace
-$bar.Padding = New-Object Windows.Forms.Padding(18, 10, 18, 8)
+$bar.Padding = New-Object Windows.Forms.Padding(8, 4, 8, 4)
 [void]$root.Controls.Add($bar, 0, 4)
 
 function New-Btn([string]$text, $bg, $fg) {
   $b = New-Object Windows.Forms.Button
   $b.Text = $text
-  $b.Size = New-Object Drawing.Size(104, 34)
+  $b.Size = New-Object Drawing.Size(94, 32)
   $b.FlatStyle = 'Flat'
   $b.FlatAppearance.BorderSize = 0
   $b.BackColor = $bg
   $b.ForeColor = $fg
-  $b.Margin = New-Object Windows.Forms.Padding(0, 0, 10, 0)
+  $b.Margin = New-Object Windows.Forms.Padding(0, 0, 6, 6)
   $b.Cursor = [Windows.Forms.Cursors]::Hand
   return $b
 }
@@ -315,9 +358,10 @@ $bar.Controls.AddRange(@($btnStart, $btnStop, $btnRefresh, $btnClear, $btnExport
 $progress = New-Object Windows.Forms.ProgressBar
 $progress.Style = 'Marquee'
 $progress.MarqueeAnimationSpeed = 30
-$progress.Size = New-Object Drawing.Size(150, 14)
+$progress.Size = New-Object Drawing.Size(60, 10)
 $progress.Margin = New-Object Windows.Forms.Padding(12, 11, 0, 0)
 $progress.Visible = $false
+$bar.SetFlowBreak($btnRefresh,$true)
 $bar.Controls.Add($progress)
 
 # ---- 日志框 ----
@@ -326,19 +370,19 @@ $log.Multiline = $true
 $log.ReadOnly = $true
 $log.Dock = 'Fill'
 $log.ScrollBars = 'Both'
-$log.WordWrap = $false
+$log.WordWrap = $true
 $log.BorderStyle = 'FixedSingle'
 $log.BackColor = [Drawing.Color]::FromArgb(24, 26, 30)
 $log.ForeColor = [Drawing.Color]::FromArgb(214, 220, 230)
 $log.Font = New-Object Drawing.Font('Consolas', 9)
-$log.Margin = New-Object Windows.Forms.Padding(18, 0, 18, 10)
+$log.Margin = New-Object Windows.Forms.Padding(8, 0, 8, 4)
 [void]$root.Controls.Add($log, 0, 5)
 
 # ---- 底部状态文字 ----
 $statusLabel = New-Object Windows.Forms.Label
 $statusLabel.Dock = 'Fill'
 $statusLabel.TextAlign = 'MiddleLeft'
-$statusLabel.Padding = New-Object Windows.Forms.Padding(18, 0, 0, 0)
+$statusLabel.Padding = New-Object Windows.Forms.Padding(8, 0, 8, 0)
 $statusLabel.ForeColor = [Drawing.Color]::FromArgb(110, 114, 122)
 $statusLabel.Text = '就绪'
 [void]$root.Controls.Add($statusLabel, 0, 6)
@@ -378,7 +422,6 @@ function Set-Busy([bool]$b) {
   $btnRefresh.Enabled = -not $b
   $btnClear.Enabled   = -not $b
   $btnExport.Enabled  = -not $b
-  $nodeSelector.Enabled = -not $b
   $progress.Visible   = $b
 }
 
@@ -595,25 +638,25 @@ $btnStop.Add_Click({
   if ($r -eq [Windows.Forms.DialogResult]::Yes) { Invoke-Action 'stop' }
 })
 
-$form.Add_Shown({ $ageTimer.Start(); $deletionTimer.Start(); Invoke-Action 'status' })
+# Long IPv6 addresses and timestamps remain readable even on narrower cards.
+$toolTip=New-Object Windows.Forms.ToolTip
+foreach ($label in @($banner,$lblId,$lblIp,$lblDns,$lblPort)+$ageLabels+$balanceLabels) {
+  $label.Add_MouseEnter({ $toolTip.SetToolTip($this,$this.Text) })
+}
 
-$form.Add_FormClosing({
-  param($s, $e)
-  if ($script:busy) {
-    $r = [Windows.Forms.MessageBox]::Show('当前还有操作在进行中。关闭窗口不会取消已提交的云端操作，确定要关闭吗？', '确认关闭',
-          [Windows.Forms.MessageBoxButtons]::YesNo, [Windows.Forms.MessageBoxIcon]::Question)
-    if ($r -ne [Windows.Forms.DialogResult]::Yes) { $e.Cancel = $true }
+function Get-NodePanel { return $form }
+function Get-NodeBusy { return $script:busy }
+function Initialize-NodePanel {
+  $ageTimer.Start(); $deletionTimer.Start(); Invoke-Action 'status'
+}
+function Close-NodePanel {
+  $deletionTimer.Dispose(); $ageTimer.Dispose(); $timer.Dispose(); $toolTip.Dispose()
+  if ($null -ne $script:job) {
+    # Do not kill a child that may have already submitted a cloud operation.
+    if ($script:job.Process.HasExited) {
+      Remove-Item -LiteralPath $script:job.OutFile,$script:job.ErrFile -ErrorAction SilentlyContinue
+    }
+    $script:job.Process.Dispose()
   }
-})
-
-# ==================== 启动 ====================
-try {
-  [void]$form.ShowDialog()
-} catch {
-  [void][Windows.Forms.MessageBox]::Show("界面运行出错：`n$($_.Exception.Message)", '错误')
-} finally {
-  $deletionTimer.Dispose()
-  $ageTimer.Dispose()
-  $timer.Dispose()
   $form.Dispose()
 }
