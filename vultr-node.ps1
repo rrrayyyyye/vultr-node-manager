@@ -45,6 +45,39 @@ function Test-TransientApiError([Exception]$Exception) {
   return $false
 }
 
+function Format-ApiError($Record) {
+  $response = $Record.Exception.Response
+  $status = $null
+  if ($null -ne $response -and $null -ne $response.StatusCode) { $status = [int]$response.StatusCode }
+  $detail = [string]$Record.ErrorDetails.Message
+  if (-not $detail -and $null -ne $response) {
+    # PowerShell 5.1 can leave the API JSON in the response stream instead.
+    $reader=$null
+    try {
+      $reader=[IO.StreamReader]::new($response.GetResponseStream())
+      $buffer=New-Object char[] 8192
+      $length=$reader.Read($buffer,0,$buffer.Length)
+      $detail=[string]::new($buffer,0,$length)
+    } catch { } finally { if ($reader) { $reader.Dispose() } }
+  }
+  $message=[string]$Record.Exception.Message
+  if ($detail) {
+    try {
+      $payload=$detail | ConvertFrom-Json -ErrorAction Stop
+      if ($payload.error -is [string] -and $payload.error) { $message=$payload.error }
+    } catch { } # Do not dump HTML pages, headers or arbitrary response payloads.
+  }
+  if ($Headers.Authorization) {
+    foreach ($secret in @([string]$Headers.Authorization, ([string]$Headers.Authorization -replace '^Bearer\s+',''))) {
+      if ($secret) { $message=$message.Replace($secret,'[REDACTED]') }
+    }
+  }
+  $message=($message -replace '[\r\n\x00-\x1f]+',' ').Trim()
+  if ($message.Length -gt 600) { $message=$message.Substring(0,600)+'…' }
+  if ($null -ne $status) { return "Vultr API 请求失败（HTTP $status）：$message" }
+  return "Vultr API 请求失败：$message 已绕过系统 HTTP 代理；若使用 FlClash 全局/TUN，请确保管理 API 有可用直连路由。"
+}
+
 function Invoke-Api {
   param([string]$Path, [string]$Method = 'Get', $Body = $null, [int]$TimeoutSec = 0, [int]$ReadAttempts = 2)
   if ($TimeoutSec -le 0) { $TimeoutSec = if ($Method -eq 'Get') { 8 } else { 60 } }
@@ -57,7 +90,7 @@ function Invoke-Api {
       if ($attempt -lt $attempts -and (Test-TransientApiError $_.Exception)) {
         Write-Host "管理连接短暂中断，1 秒后重试只读查询（$attempt/$attempts）。" -ForegroundColor Yellow
         Start-Sleep -Seconds 1
-      } else { throw "Vultr API 请求失败：$($_.Exception.Message) 已绕过系统 HTTP 代理；若使用 FlClash 全局/TUN，请确保管理 API 有可用直连路由。" }
+      } else { throw (Format-ApiError $_) }
     }
   }
 }

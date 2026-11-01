@@ -57,6 +57,13 @@ function Invoke-RestMethod {
   }
   $script:apiCalls++
   switch ($script:mode) {
+    'http-400' {
+      $exception=[Exception]::new('Bad Request')
+      $exception | Add-Member -NotePropertyName Response -NotePropertyValue ([pscustomobject]@{StatusCode=400})
+      $record=[Management.Automation.ErrorRecord]::new($exception,'FixtureBadRequest',[Management.Automation.ErrorCategory]::InvalidArgument,$null)
+      $record.ErrorDetails=[Management.Automation.ErrorDetails]::new('{"error":"Fixture OS requires more RAM; credential fake-test-key","status":400}')
+      throw $record
+    }
     'error' { throw [Net.WebException]::new('Simulated disconnected upstream proxy') }
     'forbidden' { throw [Net.WebException]::new('Simulated HTTP 403: source IP denied') }
     'malformed' { return [pscustomobject]@{unexpected='not an instance list'} }
@@ -95,6 +102,14 @@ try {
   [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls
   $script:expectedTls=[Net.SecurityProtocolType]::Tls12
   Microsoft.PowerShell.Utility\Write-Host 'PASS: modern OS TLS defaults remain unchanged'
+
+  $script:mode='http-400'; $script:requests.Clear(); $failure=''
+  $previousHeaders=$Headers; $Headers=@{Authorization='Bearer fake-test-key'}
+  try { $null=Invoke-Api '/instances' 'Post' @{region='atl'} } catch { $failure=$_.Exception.Message }
+  $Headers=$previousHeaders
+  Assert-Task ($failure -like '*HTTP 400*Fixture OS requires more RAM*' -and $failure -notlike '*直连路由*' -and $failure -notlike '*fake-test-key*') 'HTTP error hides API reason, blames proxy or exposes authorization'
+  Assert-Task ($script:requests.Count -eq 1) 'Rejected create request retried'
+  Microsoft.PowerShell.Utility\Write-Host 'PASS: HTTP rejection shows the API reason, redacts credentials and never retries creation'
 
   # Polling sees current cloud state even if deletion was done elsewhere.
   $MachineStatus=$true; $script:mode='present'; $script:lines.Clear()
