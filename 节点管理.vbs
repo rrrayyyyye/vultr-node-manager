@@ -1,7 +1,7 @@
 ' Vultr node manager - portable launcher. No install needed.
 Option Explicit
 
-Dim fso, sh, here, ps1
+Dim fso, sh, here, ps1, node, pattern, command
 Set fso = CreateObject("Scripting.FileSystemObject")
 Set sh  = CreateObject("WScript.Shell")
 
@@ -18,4 +18,13 @@ If Not fso.FileExists(fso.BuildPath(here, "nodes.json")) Or Not fso.FileExists(f
   WScript.Quit 1
 End If
 
-sh.Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & ps1 & """", 0, False
+node = "tokyo"
+If WScript.Arguments.Count > 0 Then node = WScript.Arguments(0)
+Set pattern = New RegExp
+pattern.Pattern = "^[a-z0-9-]+$"
+If Not pattern.Test(node) Then
+  MsgBox "Invalid node ID.", 16, "Vultr Node Manager"
+  WScript.Quit 1
+End If
+command = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & ps1 & """ -Node " & node
+sh.Run command, 0, False

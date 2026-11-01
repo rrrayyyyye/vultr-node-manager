@@ -115,6 +115,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\check-syntax.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\node-regression.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\status-network.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\portable-setup.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\window-launch.ps1
 ```
 
 测试使用模板、模拟 API 与临时目录，不需要真实凭据，不创建或删除真实实例。GitHub Actions 在提交与 PR 时运行这些检查；这属于自动测试，Codex 自动 PR 审查可日后单独启用。

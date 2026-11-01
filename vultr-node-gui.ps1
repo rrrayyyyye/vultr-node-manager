@@ -27,10 +27,9 @@ function Get-PendingDeletion {
 function Open-NodeWindow([string]$Id) {
   $entries=@($NodeConfig.nodes | Where-Object { $_.id -eq $Id })
   if ($entries.Count -ne 1) { throw '节点不存在或重复。' }
-  $gui=(Join-Path $Dir 'vultr-node-gui.ps1').Replace("'","''")
-  $safeId=$Id.Replace("'","''")
-  $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes("& '$gui' -Node '$safeId'"))
-  Start-Process powershell.exe -WindowStyle Hidden -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand',$encoded)
+  if ($Id -notmatch '^[a-z0-9-]+$') { throw '节点 ID 格式无效。' }
+  $launcher=Join-Path $Dir '节点管理.vbs'
+  Start-Process wscript.exe -WindowStyle Hidden -ArgumentList @(('"'+$launcher+'"'),$Id)
 }
 
 # ==================== 子进程调用 / 输出实时读取 ====================
