@@ -2,7 +2,7 @@
 $root=Split-Path -Parent $PSScriptRoot
 $sandbox=Join-Path ([IO.Path]::GetTempPath()) ('node-dashboard-smoke-'+[guid]::NewGuid().ToString('N'))
 [void][IO.Directory]::CreateDirectory($sandbox)
-foreach($file in @('节点管理.vbs','vultr-node-gui.ps1','node-time.ps1')) {
+foreach($file in @('节点管理.vbs','vultr-node-gui.ps1','node-dashboard.ps1','node-time.ps1')) {
   Copy-Item -LiteralPath (Join-Path $root $file) -Destination (Join-Path $sandbox $file)
 }
 $config=Get-Content (Join-Path $root 'nodes.example.json') -Raw -Encoding UTF8|ConvertFrom-Json
@@ -21,7 +21,7 @@ $result=@{node=$Node;name=$Node;exists=$true;id=('fixture-'+$Node);ip='192.0.2.1
 Write-Host ('@@NODE_STATUS@@'+($result|ConvertTo-Json -Compress))
 '@
 [IO.File]::WriteAllText((Join-Path $sandbox 'vultr-node.ps1'),$core,[Text.UTF8Encoding]::new($true))
-$path=Join-Path $sandbox 'vultr-node-gui.ps1'
+$path=Join-Path $sandbox 'node-dashboard.ps1'
 $gui=[IO.File]::ReadAllText($path)
 $probe=@'
 $script:qaPhase=0
@@ -31,16 +31,15 @@ $qaTimer.Interval=100
 $qaTimer.Add_Tick({
   try {
     if([DateTime]::UtcNow -gt $script:qaDeadline){throw ('Timed out in phase '+$script:qaPhase)}
-    if($modules.Count -ne 3 -or $cards.Controls.Count -ne 3){throw 'Missing node cards'}
-    if($cards.Width -lt $scroll.ClientSize.Width -or $cards.Height -lt $scroll.ClientSize.Height){throw 'Node cards did not fill the dashboard'}
+    if($modules.Count -ne 3 -or $rows.Controls.Count -ne 3){throw 'Missing node rows'}
     if([Windows.Forms.Application]::OpenForms.Count -ne 1 -or -not $dashboard.Visible -or $dashboard.Handle -eq [IntPtr]::Zero){throw 'Expected exactly one visible top-level window'}
     for($index=0;$index -lt 3;$index++){
       $module=$modules[$index]
       $expected=$NodeConfig.nodes[$index].id
       $identity=& $module { $script:selectedNode.id }
-      if($identity -ne $expected -or $cards.Controls[$index].Name -ne $expected -or -not $cards.Controls[$index].Visible){throw 'Node card identity/visibility mismatch'}
+      if($identity -ne $expected -or $rows.Controls[$index].Name -ne $expected -or -not $rows.Controls[$index].Visible){throw 'Node row identity/visibility mismatch'}
       $clipped=& $module {
-        @($btnStart,$btnStop,$btnRefresh,$btnClear,$btnExport) | Where-Object {
+        @($btnStart,$btnStop,$btnRefresh,$btnDetails) | Where-Object {
           $_.Right -gt $bar.ClientSize.Width -or $_.Bottom -gt $bar.ClientSize.Height
         }
       }
@@ -50,6 +49,18 @@ $qaTimer.Add_Tick({
     $laxBusy=& $modules[1] { Get-NodeBusy }
     $atlBusy=& $modules[2] { Get-NodeBusy }
     if($script:qaPhase -eq 0 -and $tokyoBusy -and -not $laxBusy -and -not $atlBusy){
+      if($logHost.Visible -or $detailText.Visible){throw 'Diagnostics should be collapsed initially'}
+      if($dashboard.ClientSize.Height -gt 520){throw 'Default window is oversized'}
+      $before=[IO.File]::ReadAllText((Join-Path $Dir 'los-angeles.count'))
+      & $modules[1] {$btnDetails.PerformClick()}
+      & $refreshView
+      if(-not $shared.expanded -or $shared.selectedId -ne 'los-angeles' -or $logHost.Controls.Count -ne 1){throw 'Details did not select a single shared log'}
+      $tabs[0].PerformClick(); & $refreshView
+      $tabs[1].PerformClick(); & $refreshView
+      if([IO.File]::ReadAllText((Join-Path $Dir 'los-angeles.count')) -ne $before){throw 'Viewing details triggered a refresh'}
+      if($logHost.Controls.Count -ne 1){throw 'Node navigation duplicated visible logs'}
+      $toggle.PerformClick()
+      if($logHost.Visible -or $shared.expanded){throw 'Diagnostics did not collapse'}
       foreach($index in @(1,2)){
         $expected='fixture-'+$NodeConfig.nodes[$index].id
         $actual=& $modules[$index] {$lblId.Text}
@@ -87,17 +98,12 @@ $qaTimer.Add_Tick({
           }
         }
       }
-      $dashboard.ClientSize=New-Object Drawing.Size(900,610)
-      $dashboard.PerformLayout(); $scroll.PerformLayout(); $cards.PerformLayout()
+      $dashboard.Size=$dashboard.MinimumSize
+      $dashboard.PerformLayout(); $scroll.PerformLayout(); $rows.PerformLayout()
       $script:qaPhase=4
     }
     elseif($script:qaPhase -eq 4){
-      if(-not $scroll.HorizontalScroll.Visible -or $cards.Width -lt 1080){throw 'Narrow window cannot scroll to all node cards'}
-      foreach($module in $modules){
-        & $module {
-          if($log.Height -lt 50){throw 'Narrow window lost the node log area'}
-        }
-      }
+      if($scroll.HorizontalScroll.Visible){throw 'Compact node rows require horizontal scrolling'}
       [IO.File]::WriteAllText((Join-Path $Dir 'result.json'),' {"ok":true}')
       $qaTimer.Stop(); $dashboard.Close()
     }
@@ -114,8 +120,10 @@ try { [void]$dashboard.ShowDialog() } finally { $qaTimer.Dispose() }
 '@
 if(-not $gui.Contains('[void]$dashboard.ShowDialog()')){throw 'Dashboard test hook missing'}
 $gui=$gui.Replace('[void]$dashboard.ShowDialog()',$probe)
+[IO.File]::WriteAllText($path,$gui,[Text.UTF8Encoding]::new($true))
 # Construction failures must also reach the launcher test rather than a hidden console.
-$gui=$gui.Replace('if (-not $Panel) { Show-NodeDashboard; return }',@'
+$path=Join-Path $sandbox 'vultr-node-gui.ps1'
+$gui=[IO.File]::ReadAllText($path).Replace('if (-not $Panel) { Show-NodeDashboard; return }',@'
 if (-not $Panel) {
   try { Show-NodeDashboard } catch {
     [IO.File]::WriteAllText((Join-Path $Dir 'result.json'),(@{ok=$false;error=$_.Exception.Message;trace=$_.ScriptStackTrace}|ConvertTo-Json -Compress))
@@ -132,4 +140,4 @@ while(-not (Test-Path $resultPath) -and [DateTime]::UtcNow -lt $deadline){Start-
 if(-not (Test-Path $resultPath)){throw "Dashboard launcher produced no test result. Fixture: $sandbox"}
 $result=Get-Content -LiteralPath $resultPath -Raw -Encoding UTF8|ConvertFrom-Json
 if(-not $result.ok){throw ($result.error+"`n"+$result.trace+"`nFixture: "+$sandbox)}
-Write-Host 'PASS: one visible dashboard, three visible cards, concurrent refresh, isolated results/logs, and nonzero child failure (mock core only)'
+Write-Host 'PASS: compact node rows, one collapsible log, instant detail navigation, concurrent refresh and isolated errors (mock core only)'

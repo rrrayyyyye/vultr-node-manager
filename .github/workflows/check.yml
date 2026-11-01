@@ -21,6 +21,6 @@ jobs:
       - name: First-run and migration setup (local fixtures only)
         shell: powershell
         run: .\tests\portable-setup.ps1
-      - name: Single dashboard and concurrent node cards (mock core only)
+      - name: Compact dashboard and concurrent node rows (mock core only)
         shell: powershell
         run: .\tests\window-launch.ps1
