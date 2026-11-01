@@ -145,7 +145,7 @@ $colFace  = [Drawing.Color]::FromArgb(246, 247, 249)
 $colBtnPl = [Drawing.Color]::FromArgb(232, 234, 238)
 
 $form = New-Object Windows.Forms.Form
-$form.Text = 'Vultr 多地区节点管理 · 东京 / 洛杉矶'
+$form.Text = 'Vultr 多地区节点管理'
 $form.ClientSize = New-Object Drawing.Size(900, 786)
 $form.MinimumSize = New-Object Drawing.Size(880, 696)
 $form.StartPosition = 'CenterScreen'

@@ -30,6 +30,22 @@
       "publicKey": "YOUR_REALITY_PUBLIC_KEY",
       "shortId": "YOUR_REALITY_SHORT_ID",
       "sni": "www.microsoft.com"
+    },
+    {
+      "id": "atlanta-v6",
+      "name": "亚特兰大（IPv6）",
+      "linkName": "Atlanta-IPv6-REALITY",
+      "region": "atl",
+      "label": "atl-v6-reality",
+      "domain": "YOUR_ATL_V6_SUBDOMAIN.duckdns.org",
+      "startupScriptId": "YOUR_VULTR_STARTUP_SCRIPT_ID",
+      "plan": "vc2-1c-0.5gb-v6",
+      "ipVersion": "ipv6",
+      "osId": 2284,
+      "uuid": "YOUR_VLESS_UUID",
+      "publicKey": "YOUR_REALITY_PUBLIC_KEY",
+      "shortId": "YOUR_REALITY_SHORT_ID",
+      "sni": "www.microsoft.com"
     }
   ]
 }

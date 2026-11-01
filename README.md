@@ -77,6 +77,7 @@ git config --local http.https://github.com/.proxy http://127.0.0.1:7890
 .\vultr-node.ps1 start -Node los-angeles
 .\vultr-node.ps1 status -Node los-angeles
 .\vultr-node.ps1 stop -Node los-angeles
+.\vultr-node.ps1 status -Node atlanta-v6
 .\vultr-node.ps1 export
 ```
 
@@ -85,6 +86,20 @@ git config --local http.https://github.com/.proxy http://127.0.0.1:7890
 没有已有配置时，先执行 `setup.ps1 -InitializeOnly` 生成本地模板，再填写 `nodes.json` 与 `vultr-api.key`。模板中的 `YOUR_*` 值必须全部替换。`setup.ps1` 会检查本地配置，不创建云服务器。
 
 每个地区使用独立的实例标签、域名和云端开机脚本 ID。`server/bootstrap.example.sh` 是去除凭据的服务端模板；替换域名、DuckDNS Token、VLESS UUID、REALITY 私钥和 short ID 后，再通过 Vultr 控制台保存为开机脚本。客户端公钥、UUID、short ID 必须与服务端匹配。已有账号换机时无需重新上传开机脚本。
+
+### IPv6-only 节点
+
+模板包含 `atlanta-v6`：亚特兰大 `atl`、`vc2-1c-0.5gb-v6` 套餐、`ipVersion: ipv6`。是否有库存及实际价格以创建时 Vultr 返回为准。新泽西可使用另一份独立节点配置，将地区设为 `ewr`，同时使用不同的 id、标签、域名和开机脚本。现有配置省略 `ipVersion` 时仍按 IPv4 工作，无需为升级改写旧节点。
+
+纯 IPv6 服务端须把开机模板中的 `IP_VERSION="ipv4"` 改为 `IP_VERSION="ipv6"`，并先在 DuckDNS 网页添加独立子域名。启动脚本自动取得云服务器的 IPv6 地址，只更新该域名的 AAAA 记录；不要填入管理电脑的校园网 IPv6。新域名若有默认的 A 记录，应在首次使用前清除，避免其他客户端连接错误地址。DNS Token 只能更新已有域名，不能代替网页注册子域名。
+
+IPv6 模式通过 [nat64.net](https://nat64.net/) 提供的公共 DNS64/NAT64 访问 GitHub 等仅 IPv4 下载站，服务端域名连接优先使用 IPv6；此服务的可用性会影响安装和仅 IPv4 网站的访问，不保证所有网站兼容，尤其是目标直接提供 IPv4 字面地址时。下载的 sing-box 1.14.2 Linux amd64 安装包校验固定 SHA-256，升级版本时必须同步更新校验值。IPv4 模式不启用这项服务。
+
+管理器使用实例的 `v6_main_ip`、AAAA 查询和 IPv6 TCP 检查显示该节点状态；同一地址的缩写和完整写法视为一致。导出会开启客户端与 DNS 的 IPv6 支持，新节点设置 `ip-version: ipv6`，旧节点保留 IPv4 连接。重新打开管理器即可看到新地区，再导出并更新客户端配置；FlClash 的全局 IPv6 开关若覆盖配置，也需允许 IPv6。管理器不会自动更改当前 FlClash 出口。校园网是否能连到这台境外 IPv6 服务器仍需实测，基础检查不等于 ChatGPT 完整访问测试。
+
+`git pull` 只更新程序和模板，不会把新增的私有节点配置同步到另一台电脑。另一台电脑更新程序后，还需私下同步更新后的 `nodes.json`；同一账号原有的 `vultr-api.key` 无需更换。同步前备份并核对目标配置。
+
+本次 IPv6 适配仅覆盖 Windows 管理器；现有安卓版本仍使用 IPv4 状态查询和导出逻辑，暂时不要用安卓端管理或导出此 IPv6 节点。
 
 不要把实际初始化脚本、密钥、连接配置、日志或备份加入提交，即使这是私有仓库。仓库的 `.gitignore` 已排除这些文件。两台主机同时对同一地区进行开关操作仍可能产生竞态，操作前互相确认；本机互斥锁只约束本机。
 

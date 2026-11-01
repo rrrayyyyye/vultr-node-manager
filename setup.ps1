@@ -38,6 +38,8 @@ $config = $rawSettings | ConvertFrom-Json
 if ($config.version -ne 1 -or @($config.nodes).Count -eq 0) { throw 'nodes.json 版本错误或没有节点。' }
 $ids=@{}; $labels=@{}; $domains=@{}
 foreach ($entry in $config.nodes) {
+  if ($entry.ipVersion -and $entry.ipVersion -notin @('ipv4','ipv6')) { throw 'ipVersion 只能为 ipv4 或 ipv6。' }
+  if ($entry.plan -like '*-v6' -and $entry.ipVersion -and $entry.ipVersion -ne 'ipv6') { throw 'IPv6-only 套餐必须使用 ipv6。' }
   foreach ($field in @('id','name','linkName','region','label','domain','plan','osId','startupScriptId','uuid','publicKey','shortId','sni')) {
     if ([string]::IsNullOrWhiteSpace([string]$entry.$field)) { throw "节点配置缺少 $field" }
   }

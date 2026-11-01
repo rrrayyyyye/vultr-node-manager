@@ -96,12 +96,32 @@ function New-Link($Entry = $Current) {
     $Entry.uuid, $Entry.domain, $Entry.sni, $Entry.publicKey, $Entry.shortId, ([uri]::EscapeDataString($Entry.linkName))
 }
 
+function Test-IPv6Node($Entry = $Current) {
+  # Missing field keeps existing private settings compatible.
+  return ($Entry.ipVersion -eq 'ipv6' -or $Entry.plan -like '*-v6')
+}
+
+function Get-NodeIp($Instance) {
+  $value = if (Test-IPv6Node) { [string]$Instance.v6_main_ip } else { [string]$Instance.main_ip }
+  $parsed = $null
+  if (-not [Net.IPAddress]::TryParse($value, [ref]$parsed)) { return $null }
+  $family = if (Test-IPv6Node) { [Net.Sockets.AddressFamily]::InterNetworkV6 } else { [Net.Sockets.AddressFamily]::InterNetwork }
+  if ($parsed.AddressFamily -ne $family -or $parsed.Equals([Net.IPAddress]::Any) -or $parsed.Equals([Net.IPAddress]::IPv6Any)) { return $null }
+  return $parsed.ToString()
+}
+
+function Test-SameIp([string]$Left, [string]$Right) {
+  $a=$null; $b=$null
+  return ([Net.IPAddress]::TryParse($Left,[ref]$a) -and [Net.IPAddress]::TryParse($Right,[ref]$b) -and $a.Equals($b))
+}
+
 function Write-ClientYaml {
   if (-not $OutputPath) { $script:OutputPath = Join-Path $Dir '客户端配置\vultr-multi-region.yaml' }
   $lines = [Collections.Generic.List[string]]::new()
+  $enableIPv6 = (@($Config.nodes | Where-Object { Test-IPv6Node $_ }).Count -gt 0).ToString().ToLowerInvariant()
   @('# Vultr 多地区节点；含连接凭据，请勿公开分享。',
-    'mixed-port: 7890', 'allow-lan: false', 'mode: rule', 'log-level: info', 'ipv6: false',
-    'dns:', '  enable: true', '  enhanced-mode: fake-ip', '  fake-ip-range: 198.18.0.1/16',
+    'mixed-port: 7890', 'allow-lan: false', 'mode: rule', 'log-level: info', "ipv6: $enableIPv6",
+    'dns:', '  enable: true', "  ipv6: $enableIPv6", '  enhanced-mode: fake-ip', '  fake-ip-range: 198.18.0.1/16',
     '  fake-ip-filter:', '    - api.vultr.com',
     '  nameserver:', '    - https://223.5.5.5/dns-query', '    - https://1.1.1.1/dns-query',
     '  proxy-server-nameserver:', '    - https://223.5.5.5/dns-query', '    - https://1.1.1.1/dns-query',
@@ -114,6 +134,8 @@ function Write-ClientYaml {
       '    flow: xtls-rprx-vision', "    servername: $($entry.sni)", '    client-fingerprint: chrome',
       '    reality-opts:', "      public-key: $($entry.publicKey)", ('      short-id: "{0}"' -f $entry.shortId)) |
       ForEach-Object { $lines.Add($_) }
+    if (Test-IPv6Node $entry) { $lines.Add('    ip-version: ipv6') }
+    else { $lines.Add('    ip-version: ipv4') }
   }
   @('proxy-groups:', '  - name: PROXY', '    type: select', '    proxies:') | ForEach-Object { $lines.Add($_) }
   foreach ($entry in $Config.nodes) { $lines.Add('      - ' + (ConvertTo-Json -InputObject ([string]$entry.linkName) -Compress)) }
@@ -122,12 +144,14 @@ function Write-ClientYaml {
   [void][IO.Directory]::CreateDirectory($parent)
   [IO.File]::WriteAllText($OutputPath, ($lines -join "`r`n") + "`r`n", [Text.UTF8Encoding]::new($false))
   Write-Host "已导出全部节点配置：$OutputPath"
-  Write-Host '在 FlClash 导入后，在 PROXY 中选择 Tokyo-REALITY 或 LosAngeles-REALITY。'
+  Write-Host ('在 FlClash 导入后，在 PROXY 中选择：' + (($Config.nodes | ForEach-Object linkName) -join ' / '))
 }
 
 function Test-Port443([string]$Ip) {
   if (-not $Ip -or $Ip -eq '0.0.0.0') { return $false }
-  $client = [Net.Sockets.TcpClient]::new()
+  $parsed=$null
+  if (-not [Net.IPAddress]::TryParse($Ip,[ref]$parsed)) { return $false }
+  $client = [Net.Sockets.TcpClient]::new($parsed.AddressFamily)
   try { return ($client.ConnectAsync($Ip, 443).Wait(5000) -and $client.Connected) }
   catch { return $false }
   finally { $client.Dispose() }
@@ -136,8 +160,10 @@ function Test-Port443([string]$Ip) {
 function Get-DnsIp {
   try {
     $name = [uri]::EscapeDataString($Current.domain)
-    $dns = Invoke-ManagementRequest @{ Uri="https://223.5.5.5/resolve?name=$name&type=A"; Headers=@{Accept='application/dns-json'}; TimeoutSec=10 }
-    $answers = @($dns.Answer | Where-Object { $_.type -eq 1 })
+    $record = if (Test-IPv6Node) { 'AAAA' } else { 'A' }
+    $recordType = if (Test-IPv6Node) { 28 } else { 1 }
+    $dns = Invoke-ManagementRequest @{ Uri="https://223.5.5.5/resolve?name=$name&type=$record"; Headers=@{Accept='application/dns-json'}; TimeoutSec=10 }
+    $answers = @($dns.Answer | Where-Object { $_.type -eq $recordType })
     if ($answers.Count -gt 0) { return [string]$answers[0].data }
   } catch { }
   return $null
@@ -152,17 +178,17 @@ function Write-Status {
     Write-Host "$($Current.name)：当前没有此节点实例。" -ForegroundColor Yellow
   } else {
     $instance = $instances[0]
-    $result.exists = $true; $result.id = $instance.id; $result.ip = $instance.main_ip
+    $result.exists = $true; $result.id = $instance.id; $result.ip = Get-NodeIp $instance
     $result.status = $instance.status; $result.powerStatus = $instance.power_status
     if (-not $ConfirmDeletion) {
-      $result.port443 = Test-Port443 $instance.main_ip
+      $result.port443 = Test-Port443 $result.ip
       $result.dnsIp = Get-DnsIp
     }
-    $result.dnsMatches = [bool]($result.dnsIp -and $result.dnsIp -eq $instance.main_ip)
+    $result.dnsMatches = Test-SameIp $result.dnsIp $result.ip
     $timing = Get-InstanceTiming ([string]$instance.date_created)
     $result.createdAtUtc = $timing.createdAtUtc; $result.ageSeconds = $timing.ageSeconds
     Write-Host "$($Current.name)：找到节点实例。" -ForegroundColor Cyan
-    $instance | Select-Object id, label, region, plan, status, power_status, main_ip, date_created | Format-List | Out-Host
+    $instance | Select-Object id, label, region, plan, status, power_status, main_ip, v6_main_ip, date_created | Format-List | Out-Host
     if ($null -ne $result.ageSeconds) {
       Write-Host ('创建时间（本地）: ' + ([DateTimeOffset]::Parse($result.createdAtUtc)).ToLocalTime().ToString('yyyy-MM-dd HH:mm:ss zzz'))
       Write-Host ('已开时长（自创建起）: ' + (Format-NodeAge $result.ageSeconds))
@@ -215,7 +241,7 @@ function Write-RefreshStatus {
 function Start-Node {
   $existing = @(Get-Node)
   if ($existing.Count -gt 0) {
-    Write-Host "$($Current.name)实例已存在，不重复创建。IP: $($existing[0].main_ip)" -ForegroundColor Yellow
+    Write-Host "$($Current.name)实例已存在，不重复创建。IP: $(Get-NodeIp $existing[0])" -ForegroundColor Yellow
     Write-Host ('客户端链接：' + (New-Link)); return
   }
   if (-not $Current.startupScriptId) { throw '此地区尚未完成开机脚本配置，未创建服务器。' }
@@ -226,7 +252,7 @@ function Start-Node {
   $created = Invoke-Api '/instances' 'Post' @{
     region=$Current.region; plan=$Current.plan; os_id=[int]$Current.osId;
     label=$Current.label; hostname=$Current.label; script_id=$Current.startupScriptId;
-    backups='disabled'; enable_ipv6=$false
+    backups='disabled'; enable_ipv6=(Test-IPv6Node)
   }
   $instanceId = $created.instance.id
   if (-not $instanceId) { throw '创建响应未返回实例 ID，请在控制台核对后再操作。' }
@@ -235,8 +261,9 @@ function Start-Node {
   for ($i=1; $i -le 40; $i++) {
     Start-Sleep -Seconds 6
     $state = Invoke-Api "/instances/$instanceId"
-    if ($state.instance.status -eq 'active' -and $state.instance.main_ip -and $state.instance.main_ip -ne '0.0.0.0') {
-      $ip = $state.instance.main_ip; break
+    $candidateIp = Get-NodeIp $state.instance
+    if ($state.instance.status -eq 'active' -and $candidateIp) {
+      $ip = $candidateIp; break
     }
     Write-Host "等待实例激活... ($i/40)"
   }
@@ -244,7 +271,7 @@ function Start-Node {
   Write-Host "实例已激活，IP: $ip；等待代理安装和域名更新..."
   $ready=$false; $dnsOk=$false
   for ($i=1; $i -le 40; $i++) {
-    $ready = Test-Port443 $ip; $dnsOk = ((Get-DnsIp) -eq $ip)
+    $ready = Test-Port443 $ip; $dnsOk = Test-SameIp (Get-DnsIp) $ip
     if ($ready -and $dnsOk) { break }
     Write-Host "等待初始化 ($i/40)：443=$ready，域名=$dnsOk"
     Start-Sleep -Seconds 6
@@ -264,7 +291,7 @@ function Stop-Node {
     return
   }
   $instance = $instances[0]
-  Write-Host "正在销毁 $($Current.name)：$($instance.id) ($($instance.main_ip)) ..."
+  Write-Host "正在销毁 $($Current.name)：$($instance.id) ($(Get-NodeIp $instance)) ..."
   $null = Invoke-Api "/instances/$($instance.id)" 'Delete'
   Write-StopReceipt $instance.id 'submitted'
   Write-Host '已提交销毁请求，随后刷新状态确认。' -ForegroundColor Green
